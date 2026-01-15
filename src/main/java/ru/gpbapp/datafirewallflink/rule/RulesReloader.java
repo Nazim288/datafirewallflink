@@ -7,6 +7,21 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
+/**
+ * Отвечает за полную и строгую перезагрузку правил из внешнего источника байткода.
+ *
+ * <p>Загружает скомпилированные классы правил из {@link BytecodeSource},
+ * проверяет их корректность, загружает через собственный {@link RuleClassLoader},
+ * создаёт экземпляры и атомарно обновляет {@link CompiledRulesRegistry}.</p>
+ *
+ * <p>Режим работы — <b>strict</b>: любая ошибка (битый байткод, неправильный класс,
+ * ошибка загрузки или создания экземпляра) приводит к немедленному прерыванию
+ * операции без изменения текущего набора правил.</p>
+ *
+ * <p>Обеспечивает детерминированный порядок загрузки классов для удобства диагностики.</p>
+ */
+
+
 public final class RulesReloader {
     private final BytecodeSource source;
     private final CompiledRulesRegistry registry;

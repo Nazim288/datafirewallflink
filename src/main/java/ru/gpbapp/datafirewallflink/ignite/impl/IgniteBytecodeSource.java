@@ -6,6 +6,15 @@ import ru.gpbapp.datafirewallflink.ignite.IgniteClientFacade;
 import java.util.Map;
 import java.util.Objects;
 
+/**
+ * Источник байткода правил, использующий Apache Ignite в качестве хранилища.
+ *
+ * <p>Является адаптером над {@link IgniteClientFacade} и предоставляет унифицированный
+ * интерфейс {@link BytecodeSource} для загрузки скомпилированных правил.</p>
+ *
+ * <p>Отвечает за валидацию входных параметров и делегирует фактическую загрузку данных
+ * в инфраструктурный слой Ignite.</p>
+ */
 public final class IgniteBytecodeSource implements BytecodeSource {
 
     private final IgniteClientFacade ignite;

@@ -1,0 +1,20 @@
+{
+  "details": {
+    "ALL_RESULT": "ERROR",
+    "baseInfo": {
+      "dataset_code": "String",
+      "name": "ERROR",
+      "birthdate": "ERROR"
+    },
+    "documents": {
+      "dataset_code": "String",
+      "clientSnils": "ERROR"
+    }
+  },
+  "dfw_query_id": "ID:85518006080806088c7ccbd7825494b358cd58Be2d9cfade8",
+  "dfw_hostname": "mkd-dazasl-wrk",
+  "dfw_dataset_code": "Дашборд.Тесса",
+  "dfw_readed_from_mq_dttm": "2025-11-25T10:24:04.1661915Z",
+  "dfw_action_type": "ANSWER",
+  "PROCESS_STATUS": "OK"
+}

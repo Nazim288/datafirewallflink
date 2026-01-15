@@ -6,6 +6,18 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicReference;
 
+/**
+ * Потокобезопасный контейнер для хранения текущего набора бизнес-правил.
+ *
+ * <p>Хранит правила в виде неизменяемого snapshot'а, доступного для чтения без блокировок,
+ * и обеспечивает атомарную замену всего набора правил.</p>
+ *
+ * <p>Гарантирует, что все потоки обработки работают с консистентной версией правил
+ * без промежуточных состояний.</p>
+ *
+ * <p>Используется как in-memory хранилище активных правил в механизме
+ * динамической перезагрузки.</p>
+ */
 public final class CompiledRulesContainer {
 
     private final AtomicReference<Map<String, Rule>> rulesRef =

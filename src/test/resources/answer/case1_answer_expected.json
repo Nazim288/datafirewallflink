@@ -1,0 +1,18 @@
+{
+  "details": {
+    "ALL_RESULT": "SUCCESS",
+    "baseInfo": {
+      "dataset_code": "String",
+      "fullName": "SUCCESS",
+      "name": "SUCCESS",
+      "birthdate": "SUCCESS"
+    },
+    "documents": {
+      "dataset_code": "String",
+      "clientSnils": "SUCCESS",
+      "clientInn": "SUCCESS"
+    }
+  },
+  "dfw_action_type": "ANSWER",
+  "PROCESS_STATUS": "OK"
+}

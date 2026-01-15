@@ -4,6 +4,16 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
+/**
+ * Специализированный ClassLoader для загрузки классов бизнес-правил из байткода в памяти.
+ *
+ * <p>Загружает классы напрямую из переданной карты {@code имя_класса → байткод},
+ * кеширует уже определённые классы и обеспечивает потокобезопасную загрузку.</p>
+ *
+ * <p>Используется вместе с {@link RulesReloader} для динамической загрузки и обновления
+ * реализаций интерфейса {@link Rule} без перезапуска приложения.</p>
+ */
+
 public final class RuleClassLoader extends ClassLoader {
 
     private final Map<String, byte[]> bytecodeByName;

@@ -6,8 +6,23 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import ru.gpbapp.datafirewallflink.converter.EventToFlatProfile;
+import ru.gpbapp.datafirewallflink.dto.FlatProfileDto;
 
 import java.util.Optional;
+/**
+ * Обрабатывает входящие JSON-события:
+ * <ul>
+ *     <li>проверяет корректность входной строки</li>
+ *     <li>парсит JSON в дерево</li>
+ *     <li>преобразует событие в «плоский» профиль через {@link EventToFlatProfile}</li>
+ *     <li>сериализует результат обратно в JSON-строку</li>
+ * </ul>
+ *
+ * <p>Класс устойчив к ошибкам: некорректные, пустые и проблемные сообщения
+ * безопасно отбрасываются без остановки пайплайна обработки.</p>
+ *
+ * <p>Используется как входной фильтр и нормализатор данных в потоке обработки событий.</p>
+ */
 
 public class JsonEventProcessor {
 
@@ -23,18 +38,30 @@ public class JsonEventProcessor {
 
     /** @return Optional.empty() если строка пустая/битая */
     public Optional<String> toFlatJson(String jsonLine) {
+        return toFlatProfile(jsonLine).flatMap(profile -> {
+            try {
+                return Optional.of(mapper.writeValueAsString(profile.json()));
+            } catch (Exception e) {
+                log.warn("Skip line due to serialization error: {}", safeSnippet(safeTrim(jsonLine)), e);
+                return Optional.empty();
+            }
+        });
+    }
+
+    /** @return Optional.empty() если строка пустая/битая */
+    public Optional<FlatProfileDto> toFlatProfile(String jsonLine) {
         if (jsonLine == null) {
             return Optional.empty();
         }
-        String s = jsonLine.trim();
+        String s = safeTrim(jsonLine);
         if (s.isEmpty()) {
             return Optional.empty();
         }
 
         try {
             JsonNode event = mapper.readTree(s);
-            JsonNode flat = converter.convert(event);
-            return Optional.of(mapper.writeValueAsString(flat));
+            FlatProfileDto profile = converter.convertToProfile(event);
+            return Optional.of(profile);
 
         } catch (JsonProcessingException e) {
             // битый JSON / неожиданный формат
@@ -48,10 +75,14 @@ public class JsonEventProcessor {
         }
     }
 
+    private static String safeTrim(String s) {
+        return s == null ? "" : s.trim();
+    }
+
     private static String safeSnippet(String s) {
         // чтобы логи не раздувались и не утекали данные целиком
         int max = 200;
+        if (s == null) return "";
         return s.length() <= max ? s : s.substring(0, max) + "...";
     }
 }
-

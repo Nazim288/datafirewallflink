@@ -1,0 +1,21 @@
+{
+  "detail_results": {
+    "Дашборд.Тесса": {
+      "ALL_RESULT": "ERROR",
+      "ОСНОВНЫЕ СВЕДЕНИЯ, СНИЛС": {
+        "Rule1001": "ERROR"
+      },
+      "ОСНОВНЫЕ СВЕДЕНИЯ-Дата рождения": {
+        "Rule1002": "ERROR"
+      },
+      "ОСНОВНЫЕ СВЕДЕНИЯ.Имя": {
+        "Rule1069": "ERROR"
+      }
+    }
+  },
+  "dfw_query_id": "ID:85518006080806088c7ccbd7825494b358cd58Be2d9cfade8",
+  "dfw_hostname": "mkd-dazasl-wrk",
+  "dfw_dataset_code": "Дашборд.Тесса",
+  "dfw_readed_from_mq_dttm": "2025-11-25T10:24:04.1661915Z",
+  "dfw_action_type": "ANSWER_DETAIL"
+}

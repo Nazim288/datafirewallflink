@@ -12,6 +12,18 @@ import javax.cache.Cache;
 import java.util.HashMap;
 import java.util.Map;
 
+/**
+ * Реализация {@link IgniteClientFacade} на базе Apache Ignite Thin Client.
+ *
+ * <p>Отвечает за подключение к Ignite-кластеру и загрузку байткода правил
+ * из указанного кэша.</p>
+ *
+ * <p>Загружает все записи из кэша вида {@code имя_класса → bytecode}
+ * и возвращает их в виде {@link Map} для дальнейшей динамической загрузки правил.</p>
+ *
+ * <p>Корректно управляет жизненным циклом соединения с Ignite
+ * и поддерживает безопасное освобождение ресурсов.</p>
+ */
 public final class IgniteClientFacadeImpl implements IgniteClientFacade, AutoCloseable {
 
     private final IgniteClient client;

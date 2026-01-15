@@ -3,9 +3,29 @@ package ru.gpbapp.datafirewallflink.converter;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import ru.gpbapp.datafirewallflink.dto.FlatProfileDto;
 
 import java.util.Iterator;
 import java.util.Map;
+
+/**
+ * Преобразует входящее событие в «плоский» профиль на основе mapping-описаний в JSON.
+ *
+ * <p>Класс читает структуру события и строит новый JSON-объект, в который
+ * проецируются значения полей согласно правилам вида:</p>
+ *
+ * <pre>
+ *     "mapping.someField": "targetName"
+ * </pre>
+ *
+ * <p>То есть значение поля {@code someField} будет записано в результирующий профиль
+ * под именем {@code targetName}.</p>
+ *
+ * <p>Поддерживает обработку разделов {@code baseInfo}, {@code documents} и
+ * специальную логику выбора основной карточки клиента ({@code primary=true}).</p>
+ *
+ * <p>Невалидные mapping-значения (null, "", "none") игнорируются.</p>
+ */
 
 public final class EventToFlatProfile {
 
@@ -42,6 +62,11 @@ public final class EventToFlatProfile {
         }
 
         return out;
+    }
+
+    public FlatProfileDto convertToProfile(JsonNode eventJson) {
+        ObjectNode out = convert(eventJson);
+        return new FlatProfileDto(out);
     }
 
     private void projectSection(JsonNode section, ObjectNode out) {
