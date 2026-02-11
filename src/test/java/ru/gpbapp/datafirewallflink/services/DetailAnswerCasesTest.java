@@ -6,7 +6,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 import ru.gpbapp.datafirewallflink.dto.FlatProfileDto;
-import ru.gpbapp.datafirewallflink.rule.Rule;
+import com.gpb.datafirewall.model.Rule;
 import ru.gpbapp.datafirewallflink.validation.DetailsTemplateDynamic;
 import ru.gpbapp.datafirewallflink.validation.FieldRuleBinding;
 import ru.gpbapp.datafirewallflink.validation.ValidationResult;

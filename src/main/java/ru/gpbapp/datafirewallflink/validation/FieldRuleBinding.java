@@ -8,6 +8,22 @@ import java.util.Objects;
  * logicalFieldKey: логическое поле для ANSWER_DETAIL (например "ОСНОВНЫЕ СВЕДЕНИЯ.Имя")
  */
 public final class FieldRuleBinding {
+    public String getRuleName() {
+        return ruleName;
+    }
+
+    public String getSection() {
+        return section;
+    }
+
+    public String getField() {
+        return field;
+    }
+
+    public String getLogicalFieldKey() {
+        return logicalFieldKey;
+    }
+
     public final String ruleName;
     public final String section;
     public final String field;

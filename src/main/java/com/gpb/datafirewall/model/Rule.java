@@ -1,12 +1,8 @@
-package ru.gpbapp.datafirewallflink.rule;
+package com.gpb.datafirewall.model;
 
 import java.io.Serializable;
 import java.util.Map;
 
-/**
- * Stateless rule.
- * Must be thread-safe.
- */
 public interface Rule extends Serializable {
     boolean apply(Map<String, String> data);
 }

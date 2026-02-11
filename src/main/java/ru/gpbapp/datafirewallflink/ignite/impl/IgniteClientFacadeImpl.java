@@ -36,7 +36,10 @@ public final class IgniteClientFacadeImpl implements IgniteClientFacade, AutoClo
 
     @Override
     public Map<String, byte[]> loadAllBytecodes(String cacheName) {
-        ClientCache<String, byte[]> cache = client.getOrCreateCache(cacheName);
+        ClientCache<String, byte[]> cache = client.cache(cacheName);
+        if (cache == null) {
+            throw new IllegalStateException("Ignite cache not found: " + cacheName);
+        }
 
         Map<String, byte[]> result = new HashMap<>();
 
@@ -44,16 +47,15 @@ public final class IgniteClientFacadeImpl implements IgniteClientFacade, AutoClo
             for (Cache.Entry<String, byte[]> e : cursor) {
                 String key = e.getKey();
                 byte[] val = e.getValue();
-
-                if (key == null || val == null) {
-                    continue;
+                if (key != null && val != null) {
+                    result.put(key, val);
                 }
-                result.put(key, val);
             }
         }
 
         return result;
     }
+
 
     @Override
     public void close() {

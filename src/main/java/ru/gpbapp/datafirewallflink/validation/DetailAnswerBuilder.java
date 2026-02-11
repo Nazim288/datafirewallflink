@@ -1,4 +1,5 @@
 package ru.gpbapp.datafirewallflink.validation;
+
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -6,6 +7,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
 
 /**
  * Формирует JSON детального ответа (ANSWER_DETAIL).
@@ -21,15 +23,17 @@ public final class DetailAnswerBuilder {
     /**
      * @param originalEvent   исходный event (QUERY)
      * @param allResult       итоговая агрегация (SUCCESS / ERROR)
-     * @param detailByField  logicalField -> (ruleName -> SUCCESS|ERROR)
+     * @param detailByField   logicalField -> (ruleName -> SUCCESS|ERROR)
      */
     public ObjectNode buildDetailAnswer(JsonNode originalEvent,
                                         String allResult,
                                         Map<String, Map<String, String>> detailByField) {
 
+        if (detailByField == null) detailByField = Map.of();
+        if (allResult == null) allResult = "ERROR";
+
         ObjectNode result = mapper.createObjectNode();
 
-        // dataset → detail_results
         String dataset = getText(originalEvent, "dfw_dataset_code", "UNKNOWN_DATASET");
 
         ObjectNode detailResults = mapper.createObjectNode();
@@ -37,18 +41,34 @@ public final class DetailAnswerBuilder {
 
         datasetNode.put("ALL_RESULT", allResult);
 
-        for (Map.Entry<String, Map<String, String>> fieldEntry : detailByField.entrySet()) {
+                // опционально: сортировка для стабильности
+        Map<String, Map<String, String>> sortedFields =
+                (detailByField instanceof java.util.SortedMap) ? detailByField : new TreeMap<>(detailByField);
+
+        for (Map.Entry<String, Map<String, String>> fieldEntry : sortedFields.entrySet()) {
+            String logicalField = fieldEntry.getKey();
+            Map<String, String> ruleMap = fieldEntry.getValue();
+            if (logicalField == null || logicalField.isBlank() || ruleMap == null) continue;
+
             ObjectNode rulesNode = mapper.createObjectNode();
-            for (Map.Entry<String, String> ruleEntry : fieldEntry.getValue().entrySet()) {
-                rulesNode.put(ruleEntry.getKey(), ruleEntry.getValue());
+
+            Map<String, String> sortedRules =
+                    (ruleMap instanceof java.util.SortedMap) ? ruleMap : new TreeMap<>(ruleMap);
+
+            for (Map.Entry<String, String> ruleEntry : sortedRules.entrySet()) {
+                String ruleName = ruleEntry.getKey();
+                String status = ruleEntry.getValue();
+                if (ruleName == null || ruleName.isBlank() || status == null) continue;
+                rulesNode.put(ruleName, status);
             }
-            datasetNode.set(fieldEntry.getKey(), rulesNode);
+
+            datasetNode.set(logicalField, rulesNode);
         }
 
         detailResults.set(dataset, datasetNode);
         result.set("detail_results", detailResults);
 
-        // --- meta поля ---
+                   // --- meta поля ---
         copyIfExists(originalEvent, result, List.of(
                 "dfw_query_id",
                 "dfw_hostname",
@@ -65,10 +85,11 @@ public final class DetailAnswerBuilder {
         return result;
     }
 
-    // ---------------- util ----------------
-
     private static void copyIfExists(JsonNode src, ObjectNode dst, List<String> fields) {
+        if (src == null || dst == null || fields == null) return;
+
         for (String f : fields) {
+            if (f == null) continue;
             JsonNode v = src.get(f);
             if (v != null && !v.isNull()) {
                 dst.set(f, v);
@@ -82,4 +103,3 @@ public final class DetailAnswerBuilder {
         return (v == null || v.isNull()) ? def : v.asText(def);
     }
 }
-

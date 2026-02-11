@@ -1,8 +1,7 @@
-package ru.gpbapp.datafirewallflink.rule;
+package ru.gpbapp.datafirewallflink.services;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.apache.flink.api.common.functions.RichMapFunction;
 import org.apache.flink.api.java.utils.ParameterTool;
 import org.apache.flink.configuration.Configuration;
@@ -15,24 +14,25 @@ import ru.gpbapp.datafirewallflink.ignite.BytecodeSource;
 import ru.gpbapp.datafirewallflink.ignite.IgniteClientFacade;
 import ru.gpbapp.datafirewallflink.ignite.impl.IgniteBytecodeSource;
 import ru.gpbapp.datafirewallflink.ignite.impl.IgniteClientFacadeImpl;
+import ru.gpbapp.datafirewallflink.mq.MqRecord;
+import ru.gpbapp.datafirewallflink.mq.MqReply;
+import ru.gpbapp.datafirewallflink.rule.CompiledRulesRegistry;
 import com.gpb.datafirewall.model.Rule;
-import ru.gpbapp.datafirewallflink.services.JsonEventProcessor;
-import ru.gpbapp.datafirewallflink.services.TimedBytecodeSource;
-import ru.gpbapp.datafirewallflink.services.ValidationService;
-import ru.gpbapp.datafirewallflink.validation.AnswerBuilder;
+import ru.gpbapp.datafirewallflink.rule.RulesReloader;
 import ru.gpbapp.datafirewallflink.validation.DetailsTemplateDynamic;
 import ru.gpbapp.datafirewallflink.validation.FieldRuleBinding;
 import ru.gpbapp.datafirewallflink.validation.ValidationResult;
 
-import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.concurrent.Callable;
 
-public class RulesOperator extends RichMapFunction<String, String> {
+public class ShortAnswerMapFunction extends RichMapFunction<MqRecord, MqReply> {
 
-    private static final Logger log = LoggerFactory.getLogger(RulesOperator.class);
+    private static final Logger log = LoggerFactory.getLogger(ShortAnswerMapFunction.class);
+
+    private transient ObjectMapper mapper;
+    private transient JsonEventProcessor processor;
 
     private transient CompiledRulesRegistry registry;
     private transient RulesReloader reloader;
@@ -40,12 +40,9 @@ public class RulesOperator extends RichMapFunction<String, String> {
 
     private transient AutoCloseable closeable;
 
-    private transient ObjectMapper mapper;
-    private transient JsonEventProcessor processor;
-
     private transient DetailsTemplateDynamic detailsTemplate;
     private transient ValidationService validationService;
-    private transient AnswerBuilder answerBuilder;
+    private transient ShortAnswerService shortAnswerService;
 
     private transient List<FieldRuleBinding> bindings;
 
@@ -57,7 +54,7 @@ public class RulesOperator extends RichMapFunction<String, String> {
                 .getExecutionConfig()
                 .getGlobalJobParameters();
 
-        String mode = pt.get("rules.loader", "thin").toLowerCase(Locale.ROOT).trim();
+        String mode = pt.get("rules.loader", "http").toLowerCase(Locale.ROOT).trim();
 
         String sourceName = pt.get("rules.sourceName", "my-source");
         String cacheName = pt.get("ignite.cache", "compiled_" + sourceName);
@@ -100,12 +97,14 @@ public class RulesOperator extends RichMapFunction<String, String> {
         log.info("[RULES] reloadAllStrict('{}') finished in {}ms, loaded rules={}",
                 nameToLoad, ms, registry.snapshot().size());
 
+        log.info("[RULES] loaded keys={}", registry.snapshot().keySet());
+
         this.mapper = new ObjectMapper();
         this.processor = new JsonEventProcessor(mapper);
 
         this.detailsTemplate = new DetailsTemplateDynamic(mapper);
         this.validationService = new ValidationService(detailsTemplate);
-        this.answerBuilder = new AnswerBuilder(mapper);
+        this.shortAnswerService = new ShortAnswerService(mapper);
 
         this.bindings = List.of(
                 new FieldRuleBinding(
@@ -133,62 +132,24 @@ public class RulesOperator extends RichMapFunction<String, String> {
                         "ДУЛ.Паспорт РФ.Номер"
                 )
         );
-
-        int subtask = getRuntimeContext().getIndexOfThisSubtask();
-        if (subtask == 0) {
-            Map<String, Rule> rulesSnapshot = registry.snapshot();
-
-            log.info("[RULES] loaded keys count={}", rulesSnapshot.size());
-            log.info("[RULES] loaded keys={}", rulesSnapshot.keySet());
-
-            rulesSnapshot.entrySet().stream()
-                    .sorted(Map.Entry.comparingByKey())
-                    .forEach(e -> {
-                        String key = e.getKey();
-                        Rule r = e.getValue();
-
-                        String ruleId = safe(() -> invokeToString(r, "getId"));
-                        String ruleName = safe(() -> invokeToString(r, "getName"));
-                        String ruleCode = safe(() -> invokeToString(r, "getCode"));
-                        String ruleClass = safe(() -> invokeToString(r, "getRuleClass")); // если есть
-                        String ruleType = safe(() -> invokeToString(r, "getType"));       // если есть
-
-                        String codePreview = ruleCode;
-                        if (codePreview != null && codePreview.length() > 200) {
-                            codePreview = codePreview.substring(0, 200) + "...";
-                        }
-
-                        log.info("[RULES] key={} id={} name={} type={} class={} codePreview={}",
-                                key, ruleId, ruleName, ruleType, ruleClass, codePreview);
-                    });
-
-            for (FieldRuleBinding b : bindings) {
-                String bindingRuleName = getBindingRuleName(b);
-                if (bindingRuleName == null) {
-                    log.warn("[RULES] cannot read ruleName from binding {}", b);
-                    continue;
-                }
-
-                if (!rulesSnapshot.containsKey(bindingRuleName)) {
-                    log.warn("[RULES] binding refers to missing rule key: {}. Example keys: {}",
-                            bindingRuleName,
-                            rulesSnapshot.keySet().stream().limit(10).toList());
-                } else {
-                    log.info("[RULES] binding OK: {}", bindingRuleName);
-                }
-            }
-        }
     }
 
     @Override
-    public String map(String value) {
-        if (value == null || value.isBlank()) return null;
+    public MqReply map(MqRecord in) {
+        if (in == null || in.payload == null || in.payload.isBlank()) {
+            log.warn("Empty MQ payload");
+            return null;
+        }
 
         try {
-            JsonNode original = mapper.readTree(value);
+            JsonNode originalEvent = mapper.readTree(in.payload);
 
-            FlatProfileDto profile = processor.toFlatProfile(original).orElse(null);
-            if (profile == null) return null;
+            FlatProfileDto profile = processor.toFlatProfile(originalEvent).orElse(null);
+            if (profile == null) {
+                log.warn("Flat profile is null, skip. dfw_query_id={}",
+                        originalEvent.path("dfw_query_id").asText(null));
+                return null;
+            }
 
             Map<String, Rule> rules = registry.snapshot();
 
@@ -198,12 +159,19 @@ public class RulesOperator extends RichMapFunction<String, String> {
                     bindings
             );
 
-            ObjectNode answer = answerBuilder.buildAnswer(original, validation);
-            return mapper.writeValueAsString(answer);
+            String shortJson = shortAnswerService.build(originalEvent, validation);
+            if (shortJson == null) {
+                log.warn("ShortAnswerService returned null. dfw_query_id={}",
+                        originalEvent.path("dfw_query_id").asText(null));
+                return null;
+            }
+
+            return new MqReply(in.msgId, shortJson);
 
         } catch (Exception e) {
-            log.warn("RulesOperator failed to process event (first 200 chars): {}",
-                    value.length() > 200 ? value.substring(0, 200) + "..." : value, e);
+            String s = in.payload;
+            String preview = s.length() > 200 ? s.substring(0, 200) : s;
+            log.error("Failed to build short answer. Payload(first 200)={}", preview, e);
             return null;
         }
     }
@@ -213,42 +181,7 @@ public class RulesOperator extends RichMapFunction<String, String> {
         try {
             if (closeable != null) closeable.close();
         } catch (Exception e) {
-            log.warn("Failed to close rules resources", e);
+            log.warn("Failed to close resources", e);
         }
-    }
-
-    private static String safe(Callable<String> c) {
-        try {
-            String v = c.call();
-            return v == null ? "<null>" : v;
-        } catch (Throwable t) {
-            return "<n/a>";
-        }
-    }
-
-    private static String invokeToString(Object target, String methodName) throws Exception {
-        Method m = target.getClass().getMethod(methodName);
-        Object v = m.invoke(target);
-        return v == null ? null : String.valueOf(v);
-    }
-
-    /**
-     * FieldRuleBinding может быть record (ruleName()) или обычным классом (getRuleName()).
-     * Поддержим оба варианта без привязки к конкретной реализации.
-     */
-    private static String getBindingRuleName(FieldRuleBinding b) {
-        try {
-            Method m = b.getClass().getMethod("ruleName");
-            Object v = m.invoke(b);
-            return v == null ? null : String.valueOf(v);
-        } catch (Throwable ignored) {
-        }
-        try {
-            Method m = b.getClass().getMethod("getRuleName");
-            Object v = m.invoke(b);
-            return v == null ? null : String.valueOf(v);
-        } catch (Throwable ignored) {
-        }
-        return null;
     }
 }

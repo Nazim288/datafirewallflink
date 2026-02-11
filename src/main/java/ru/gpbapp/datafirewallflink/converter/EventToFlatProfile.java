@@ -35,13 +35,6 @@ public final class EventToFlatProfile {
         this.mapper = mapper;
     }
 
-    private boolean isValidMapping(String mapping) {
-        if (mapping == null) return false;
-
-        String m = mapping.trim().toLowerCase();
-        return !(m.isEmpty() || m.equals("none") || m.equals("null"));
-    }
-
     public ObjectNode convert(JsonNode eventJson) {
         ObjectNode out = mapper.createObjectNode();
 
@@ -55,7 +48,7 @@ public final class EventToFlatProfile {
         JsonNode documents = data.path("documents");
         projectSection(documents, out);
 
-        // clientIdCard → выбираем primary=true, иначе первый
+        // clientIdCard → выбираем primary=true
         JsonNode card = pickPrimary(documents.path("clientIdCard"));
         if (card != null) {
             projectSection(card, out);
@@ -69,6 +62,12 @@ public final class EventToFlatProfile {
         return new FlatProfileDto(out);
     }
 
+    private boolean isValidMapping(String mapping) {
+        if (mapping == null) return false;
+        String m = mapping.trim().toLowerCase(java.util.Locale.ROOT);
+        return !(m.isEmpty() || m.equals("none") || m.equals("null"));
+    }
+
     private void projectSection(JsonNode section, ObjectNode out) {
         if (section == null || section.isMissingNode() || section.isNull() || !section.isObject()) return;
 
@@ -76,26 +75,25 @@ public final class EventToFlatProfile {
         while (fields.hasNext()) {
             Map.Entry<String, JsonNode> e = fields.next();
             String key = e.getKey();
-
             if (!key.startsWith("mapping.")) continue;
 
-            String logical = key.substring("mapping.".length());
+            String logical = key.substring("mapping.".length()).trim();
             JsonNode mappingNode = e.getValue();
-
-            // mapping == null -> пропускаем
             if (mappingNode == null || mappingNode.isNull()) continue;
 
             String targetKeyRaw = mappingNode.asText();
-
-            // trim + lower-case проверка: "", "none", "null" => пропускаем
             if (!isValidMapping(targetKeyRaw)) continue;
 
             String targetKey = targetKeyRaw.trim();
 
             JsonNode valueNode = section.get(logical);
-            out.set(targetKey, valueNode == null ? mapper.nullNode() : valueNode);
+
+            if (!out.has(targetKey)) {
+                out.set(targetKey, valueNode == null ? mapper.nullNode() : valueNode);
+            }
         }
     }
+
 
     private JsonNode pickPrimary(JsonNode cards) {
         if (cards == null || !cards.isArray() || cards.isEmpty()) return null;

@@ -6,7 +6,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import java.util.List;
 
-import static ru.gpbapp.datafirewallflink.validation.DetailsTemplateValues.*;
+import static ru.gpbapp.datafirewallflink.validation.DetailsTemplateValues.STRING;
 
 public final class DetailsTemplateDynamic {
 
@@ -17,6 +17,8 @@ public final class DetailsTemplateDynamic {
     }
 
     public ObjectNode createDetailsSkeleton(List<FieldRuleBinding> bindings) {
+        if (bindings == null) bindings = List.of();
+
         ObjectNode details = mapper.createObjectNode();
         details.put("ALL_RESULT", STRING);
 
@@ -31,7 +33,7 @@ public final class DetailsTemplateDynamic {
             bindings.stream()
                     .filter(b -> "baseInfo".equals(b.section))
                     .forEach(b -> {
-                        if (!baseInfo.has(b.field)) {
+                        if (b != null && b.field != null && !baseInfo.has(b.field)) {
                             baseInfo.put(b.field, STRING);
                         }
                     });
@@ -47,7 +49,7 @@ public final class DetailsTemplateDynamic {
                 bindings.stream()
                         .filter(b -> "documents".equals(b.section))
                         .forEach(b -> {
-                            if (!documents.has(b.field)) {
+                            if (b != null && b.field != null && !documents.has(b.field)) {
                                 documents.put(b.field, STRING);
                             }
                         });
@@ -61,7 +63,7 @@ public final class DetailsTemplateDynamic {
                 bindings.stream()
                         .filter(b -> "clientIdCard0".equals(b.section))
                         .forEach(b -> {
-                            if (!card0.has(b.field)) {
+                            if (b != null && b.field != null && !card0.has(b.field)) {
                                 card0.put(b.field, STRING);
                             }
                         });

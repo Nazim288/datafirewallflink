@@ -28,7 +28,6 @@ public final class IgniteBytecodeSource implements BytecodeSource {
         if (cacheName == null || cacheName.isBlank()) {
             throw new IllegalArgumentException("cacheName must not be null/blank");
         }
-        // return Map.copyOf(ignite.loadAllBytecodes(cacheName));
         return ignite.loadAllBytecodes(cacheName);
     }
 }

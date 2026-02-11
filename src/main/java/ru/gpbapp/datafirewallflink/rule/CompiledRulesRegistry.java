@@ -1,5 +1,7 @@
 package ru.gpbapp.datafirewallflink.rule;
 
+import com.gpb.datafirewall.model.Rule;
+
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
@@ -28,14 +30,15 @@ public final class CompiledRulesRegistry {
         return rulesRef.get().get(name);
     }
 
+               // immutable snapshot
     public Map<String, Rule> snapshot() {
-        return rulesRef.get(); // immutable snapshot
+        return rulesRef.get();
     }
-
+              // atomic swap
     public void replaceAll(Map<String, Rule> newRules) {
         Objects.requireNonNull(newRules, "newRules must not be null");
         Map<String, Rule> copy = Collections.unmodifiableMap(new HashMap<>(newRules));
-        rulesRef.set(copy); // atomic swap
+        rulesRef.set(copy);
     }
 
     public void clear() {

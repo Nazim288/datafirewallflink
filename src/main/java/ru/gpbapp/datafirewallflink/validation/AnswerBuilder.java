@@ -20,7 +20,11 @@ public final class AnswerBuilder {
 
         ObjectNode out = mapper.createObjectNode();
 
-        out.set("details", validation.details());
+        if (validation != null && validation.details() != null) {
+            out.set("details", validation.details().deepCopy());
+        } else {
+            out.set("details", mapper.createObjectNode());
+        }
 
         copyIfExists(originalEvent, out, List.of(
                 "dfw_query_id",
@@ -31,7 +35,7 @@ public final class AnswerBuilder {
         ));
 
         out.put("dfw_action_type", "ANSWER");
-        out.put("PROCESS_STATUS", validation.processStatus());
+        out.put("PROCESS_STATUS", validation == null ? "ERROR" : validation.processStatus());
 
         String now = Instant.now().toString();
         out.put("dfw_created_dttm", now);
@@ -41,10 +45,12 @@ public final class AnswerBuilder {
     }
 
     private static void copyIfExists(JsonNode src, ObjectNode dst, List<String> fields) {
+        if (src == null || dst == null || fields == null) return;
+
         for (String f : fields) {
+            if (f == null) continue;
             JsonNode v = src.get(f);
             if (v != null && !v.isNull()) dst.set(f, v);
         }
     }
 }
-

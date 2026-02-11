@@ -9,6 +9,7 @@ import ru.gpbapp.datafirewallflink.converter.EventToFlatProfile;
 import ru.gpbapp.datafirewallflink.dto.FlatProfileDto;
 
 import java.util.Optional;
+
 /**
  * Обрабатывает входящие JSON-события:
  * <ul>
@@ -20,10 +21,7 @@ import java.util.Optional;
  *
  * <p>Класс устойчив к ошибкам: некорректные, пустые и проблемные сообщения
  * безопасно отбрасываются без остановки пайплайна обработки.</p>
- *
- * <p>Используется как входной фильтр и нормализатор данных в потоке обработки событий.</p>
  */
-
 public class JsonEventProcessor {
 
     private static final Logger log = LoggerFactory.getLogger(JsonEventProcessor.class);
@@ -50,27 +48,35 @@ public class JsonEventProcessor {
 
     /** @return Optional.empty() если строка пустая/битая */
     public Optional<FlatProfileDto> toFlatProfile(String jsonLine) {
-        if (jsonLine == null) {
-            return Optional.empty();
-        }
+        if (jsonLine == null) return Optional.empty();
         String s = safeTrim(jsonLine);
-        if (s.isEmpty()) {
-            return Optional.empty();
-        }
+        if (s.isEmpty()) return Optional.empty();
 
         try {
             JsonNode event = mapper.readTree(s);
-            FlatProfileDto profile = converter.convertToProfile(event);
-            return Optional.of(profile);
+            return toFlatProfile(event);
 
         } catch (JsonProcessingException e) {
-            // битый JSON / неожиданный формат
             log.debug("Skip invalid json line: {}", safeSnippet(s), e);
             return Optional.empty();
 
         } catch (Exception e) {
-            // конвертер/логика упала
             log.warn("Skip line due to processing error: {}", safeSnippet(s), e);
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * ✅ Новый быстрый путь: конвертация без повторного парсинга.
+     * Используй, если ты уже сделал mapper.readTree(...) снаружи.
+     */
+    public Optional<FlatProfileDto> toFlatProfile(JsonNode event) {
+        if (event == null) return Optional.empty();
+        try {
+            FlatProfileDto profile = converter.convertToProfile(event);
+            return Optional.of(profile);
+        } catch (Exception e) {
+            log.warn("Skip event due to processing error", e);
             return Optional.empty();
         }
     }
@@ -80,7 +86,6 @@ public class JsonEventProcessor {
     }
 
     private static String safeSnippet(String s) {
-        // чтобы логи не раздувались и не утекали данные целиком
         int max = 200;
         if (s == null) return "";
         return s.length() <= max ? s : s.substring(0, max) + "...";

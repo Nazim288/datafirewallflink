@@ -3,17 +3,19 @@ package ru.gpbapp.datafirewallflink.dto;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
-import java.util.HashMap;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 public final class FlatProfileDto {
+
     private final ObjectNode data;
 
     public FlatProfileDto(ObjectNode data) {
         this.data = data;
     }
 
+    /** Исходный JSON-профиль (read-only view). */
     public ObjectNode json() {
         return data;
     }
@@ -29,13 +31,17 @@ public final class FlatProfileDto {
 
     /**
      * Представление профиля как Map<String, String> для Rule.apply(...).
-     * Значения приводятся к строке:
-     * - null/JSON null -> null
-     * - числа/boolean -> asText()
-     * - объекты/массивы -> toString() (JSON)
+     *
+     * <ul>
+     *   <li>null / JSON null → null</li>
+     *   <li>scalar → asText()</li>
+     *   <li>object/array → JSON string</li>
+     * </ul>
+     *
+     * Порядок ключей детерминирован.
      */
     public Map<String, String> asStringMap() {
-        Map<String, String> out = new HashMap<>();
+        Map<String, String> out = new LinkedHashMap<>();
         Iterator<Map.Entry<String, JsonNode>> it = data.fields();
 
         while (it.hasNext()) {
@@ -43,16 +49,14 @@ public final class FlatProfileDto {
             String key = e.getKey();
             JsonNode v = e.getValue();
 
-            if (key == null) continue;
+            if (key == null || key.isBlank()) continue;
 
             String str;
             if (v == null || v.isNull()) {
                 str = null;
             } else if (v.isValueNode()) {
-                // text/number/boolean
                 str = v.asText();
             } else {
-                // object/array -> JSON string
                 str = v.toString();
             }
 

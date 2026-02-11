@@ -1,5 +1,7 @@
 package ru.gpbapp.datafirewallflink.rule;
 
+import com.gpb.datafirewall.model.Rule;
+
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;

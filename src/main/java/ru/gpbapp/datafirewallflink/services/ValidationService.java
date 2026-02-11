@@ -1,7 +1,8 @@
 package ru.gpbapp.datafirewallflink.services;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import ru.gpbapp.datafirewallflink.rule.Rule;
+import com.gpb.datafirewall.model.Rule;
 import ru.gpbapp.datafirewallflink.validation.DetailsTemplateDynamic;
 import ru.gpbapp.datafirewallflink.validation.FieldRuleBinding;
 import ru.gpbapp.datafirewallflink.validation.ValidationResult;
@@ -10,7 +11,6 @@ import java.util.*;
 
 import static ru.gpbapp.datafirewallflink.validation.DetailsTemplateValues.ERROR;
 import static ru.gpbapp.datafirewallflink.validation.DetailsTemplateValues.SUCCESS;
-
 
 public final class ValidationService {
 
@@ -24,9 +24,15 @@ public final class ValidationService {
                                      Map<String, String> flatData,
                                      List<FieldRuleBinding> bindings) {
 
+        if (rules == null) rules = Map.of();
+        if (flatData == null) flatData = Map.of();
+        if (bindings == null) bindings = List.of();
+
         ObjectNode details = template.createDetailsSkeleton(bindings);
 
         boolean anyError = false;
+        boolean anyException = false;
+
         Map<String, Map<String, String>> detail = new LinkedHashMap<>();
 
         try {
@@ -41,15 +47,14 @@ public final class ValidationService {
                     ok = (rule != null) && rule.apply(flatData);
                 } catch (Exception e) {
                     ok = false;
+                    anyException = true;
                 }
 
                 String status = ok ? SUCCESS : ERROR;
                 anyError |= !ok;
 
-                // short
                 writeStatus(details, b.section, b.field, status);
 
-                // detail
                 detail.computeIfAbsent(b.logicalFieldKey, k -> new LinkedHashMap<>())
                         .put(b.ruleName, status);
             }
@@ -57,7 +62,8 @@ public final class ValidationService {
             String all = anyError ? ERROR : SUCCESS;
             details.put("ALL_RESULT", all);
 
-            return new ValidationResult(details, all, "OK", deepUnmodifiable(detail));
+            String processStatus = anyException ? "RULE_EXCEPTION" : "OK";
+            return new ValidationResult(details, all, processStatus, deepUnmodifiable(detail));
 
         } catch (Exception fatal) {
             details.put("ALL_RESULT", ERROR);
@@ -76,23 +82,24 @@ public final class ValidationService {
     private static void writeStatus(ObjectNode details, String section, String field, String status) {
         switch (section) {
             case "baseInfo" -> {
-                ObjectNode baseInfo = (ObjectNode) details.get("baseInfo");
-                if (baseInfo != null) baseInfo.put(field, status);
+                JsonNode n = details.get("baseInfo");
+                if (n instanceof ObjectNode baseInfo) baseInfo.put(field, status);
             }
             case "documents" -> {
-                ObjectNode documents = (ObjectNode) details.get("documents");
-                if (documents != null) documents.put(field, status);
+                JsonNode n = details.get("documents");
+                if (n instanceof ObjectNode documents) documents.put(field, status);
             }
             case "clientIdCard0" -> {
-                ObjectNode documents = (ObjectNode) details.get("documents");
-                if (documents == null) return;
-                var arr = documents.get("clientIdCard");
+                JsonNode n = details.get("documents");
+                if (!(n instanceof ObjectNode documents)) return;
+
+                JsonNode arr = documents.get("clientIdCard");
                 if (arr == null || !arr.isArray() || arr.isEmpty()) return;
-                ObjectNode card0 = (ObjectNode) arr.get(0);
-                if (card0 != null) card0.put(field, status);
+
+                JsonNode first = arr.get(0);
+                if (first instanceof ObjectNode card0) card0.put(field, status);
             }
             default -> { /* ignore */ }
         }
     }
 }
-
