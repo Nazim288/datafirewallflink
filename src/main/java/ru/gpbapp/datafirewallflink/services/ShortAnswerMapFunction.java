@@ -1,7 +1,9 @@
+// ShortAnswerMapFunction.java
 package ru.gpbapp.datafirewallflink.services;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.gpb.datafirewall.model.Rule;
 import org.apache.flink.api.common.functions.RichMapFunction;
 import org.apache.flink.api.java.utils.ParameterTool;
 import org.apache.flink.configuration.Configuration;
@@ -17,15 +19,17 @@ import ru.gpbapp.datafirewallflink.ignite.impl.IgniteClientFacadeImpl;
 import ru.gpbapp.datafirewallflink.mq.MqRecord;
 import ru.gpbapp.datafirewallflink.mq.MqReply;
 import ru.gpbapp.datafirewallflink.rule.CompiledRulesRegistry;
-import com.gpb.datafirewall.model.Rule;
+import ru.gpbapp.datafirewallflink.rule.RulesApplyPlanRegistry;
 import ru.gpbapp.datafirewallflink.rule.RulesReloader;
 import ru.gpbapp.datafirewallflink.validation.DetailsTemplateDynamic;
 import ru.gpbapp.datafirewallflink.validation.FieldRuleBinding;
 import ru.gpbapp.datafirewallflink.validation.ValidationResult;
 
-import java.util.List;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.TreeMap;
 
 public class ShortAnswerMapFunction extends RichMapFunction<MqRecord, MqReply> {
 
@@ -34,7 +38,7 @@ public class ShortAnswerMapFunction extends RichMapFunction<MqRecord, MqReply> {
     private transient ObjectMapper mapper;
     private transient JsonEventProcessor processor;
 
-    private transient CompiledRulesRegistry registry;
+    private transient CompiledRulesRegistry rulesRegistry;
     private transient RulesReloader reloader;
     private transient BytecodeSource bytecodeSource;
 
@@ -43,27 +47,30 @@ public class ShortAnswerMapFunction extends RichMapFunction<MqRecord, MqReply> {
     private transient DetailsTemplateDynamic detailsTemplate;
     private transient ValidationService validationService;
     private transient ShortAnswerService shortAnswerService;
+    private transient DetailAnswerService detailAnswerService;
 
-    private transient List<FieldRuleBinding> bindings;
+    private transient RulesApplyPlanRegistry planRegistry;
 
     @Override
     public void open(Configuration parameters) {
-        this.registry = new CompiledRulesRegistry();
+        this.rulesRegistry = new CompiledRulesRegistry();
 
         ParameterTool pt = (ParameterTool) getRuntimeContext()
                 .getExecutionConfig()
                 .getGlobalJobParameters();
 
-        String mode = pt.get("rules.loader", "http").toLowerCase(Locale.ROOT).trim();
+        String mode = pt != null
+                ? pt.get("rules.loader", "http").toLowerCase(Locale.ROOT).trim()
+                : "http";
 
-        String sourceName = pt.get("rules.sourceName", "my-source");
-        String cacheName = pt.get("ignite.cache", "compiled_" + sourceName);
+        String sourceName = pt != null ? pt.get("rules.sourceName", "my-source") : "my-source";
+        String cacheName = pt != null ? pt.get("ignite.cache", "compiled_" + sourceName) : ("compiled_" + sourceName);
         String nameToLoad = "http".equals(mode) ? sourceName : cacheName;
 
         BytecodeSource rawSource;
 
         if ("http".equals(mode)) {
-            String igniteApiUrl = pt.get("ignite.apiUrl", "http://127.0.0.1:8080");
+            String igniteApiUrl = pt != null ? pt.get("ignite.apiUrl", "http://127.0.0.1:8080") : "http://127.0.0.1:8080";
             IgniteRulesApiClient apiClient = new IgniteRulesApiClient(igniteApiUrl);
 
             rawSource = new HttpBytecodeSource(apiClient);
@@ -72,8 +79,8 @@ public class ShortAnswerMapFunction extends RichMapFunction<MqRecord, MqReply> {
             log.info("[RULES] loader=http apiUrl={} sourceName={}", igniteApiUrl, sourceName);
 
         } else if ("thin".equals(mode)) {
-            String igniteHost = pt.get("ignite.host", "127.0.0.1");
-            int ignitePort = pt.getInt("ignite.port", 10800);
+            String igniteHost = pt != null ? pt.get("ignite.host", "127.0.0.1") : "127.0.0.1";
+            int ignitePort = pt != null ? pt.getInt("ignite.port", 10800) : 10800;
 
             IgniteClientFacadeImpl ignite = new IgniteClientFacadeImpl(igniteHost, ignitePort);
             IgniteClientFacade facade = ignite;
@@ -87,91 +94,104 @@ public class ShortAnswerMapFunction extends RichMapFunction<MqRecord, MqReply> {
             throw new IllegalArgumentException("Unknown rules.loader=" + mode + " (use thin|http)");
         }
 
+        this.mapper = new ObjectMapper();
+
         this.bytecodeSource = new TimedBytecodeSource(rawSource, msg -> log.info(msg));
-        this.reloader = new RulesReloader(bytecodeSource, registry);
+        this.reloader = new RulesReloader(bytecodeSource, rulesRegistry);
 
         long t0 = System.nanoTime();
         reloader.reloadAllStrict(nameToLoad);
         long ms = (System.nanoTime() - t0) / 1_000_000;
 
-        log.info("[RULES] reloadAllStrict('{}') finished in {}ms, loaded rules={}",
-                nameToLoad, ms, registry.snapshot().size());
+        Map<String, Rule> rules = rulesRegistry.snapshot();
+        log.info("[RULES] reloadAllStrict('{}') finished in {}ms, loaded rules={}", nameToLoad, ms, rules.size());
+        log.info("[RULES] loaded keys={}", rules.keySet());
 
-        log.info("[RULES] loaded keys={}", registry.snapshot().keySet());
-
-        this.mapper = new ObjectMapper();
         this.processor = new JsonEventProcessor(mapper);
 
         this.detailsTemplate = new DetailsTemplateDynamic(mapper);
         this.validationService = new ValidationService(detailsTemplate);
         this.shortAnswerService = new ShortAnswerService(mapper);
+        this.detailAnswerService = new DetailAnswerService(mapper);
 
-        this.bindings = List.of(
-                new FieldRuleBinding(
-                        "ru.gpbapp.datafirewallflink.rules.RuleNameCheck",
-                        "baseInfo",
-                        "name",
-                        "ОСНОВНЫЕ СВЕДЕНИЯ.Имя"
-                ),
-                new FieldRuleBinding(
-                        "ru.gpbapp.datafirewallflink.rules.RuleBirthdateCheck",
-                        "baseInfo",
-                        "birthdate",
-                        "ОСНОВНЫЕ СВЕДЕНИЯ-Дата рождения"
-                ),
-                new FieldRuleBinding(
-                        "ru.gpbapp.datafirewallflink.rules.RuleSnilsCheck",
-                        "documents",
-                        "clientSnils",
-                        "ОСНОВНЫЕ СВЕДЕНИЯ, СНИЛС"
-                ),
-                new FieldRuleBinding(
-                        "ru.gpbapp.datafirewallflink.rules.RulePassportNumberCheck",
-                        "clientIdCard0",
-                        "number",
-                        "ДУЛ.Паспорт РФ.Номер"
-                )
-        );
+        this.planRegistry = new RulesApplyPlanRegistry();
+
+        /// ДЛЯ ТЕСТА ПОТОМ ПЕРЕДЕЛАЮ КАК НУЖНО!!!!
+        this.planRegistry.buildRules();
+
+        log.info("[PLAN] defaultPlan size={}", planRegistry.defaultPlan().size());
+        log.info("[INIT] subtask={}", getRuntimeContext().getIndexOfThisSubtask());
     }
 
     @Override
     public MqReply map(MqRecord in) {
         if (in == null || in.payload == null || in.payload.isBlank()) {
-            log.warn("Empty MQ payload");
+            log.warn("[PIPE][no-qid] Empty MQ payload");
             return null;
         }
 
+        String raw = in.payload;
+
         try {
-            JsonNode originalEvent = mapper.readTree(in.payload);
+            JsonNode originalEvent = mapper.readTree(raw);
+            String qid = originalEvent.path("dfw_query_id").asText("no-qid");
+            String dataset = originalEvent.path("dfw_dataset_code").asText("UNKNOWN_DATASET");
+
+            log.info("[PIPE][{}] 1) MQ_IN raw(masked):\n{}", qid, maskJsonPretty(raw));
 
             FlatProfileDto profile = processor.toFlatProfile(originalEvent).orElse(null);
             if (profile == null) {
-                log.warn("Flat profile is null, skip. dfw_query_id={}",
-                        originalEvent.path("dfw_query_id").asText(null));
+                log.warn("[PIPE][{}] Flat profile is null, skip.", qid);
                 return null;
             }
 
-            Map<String, Rule> rules = registry.snapshot();
+            Map<String, String> normalizedMap = profile.asStringMap();
+
+            // 2) NORMALIZED_MAP (pretty JSON + masked)
+            log.info("[PIPE][{}] 2) NORMALIZED_MAP size={}", qid, normalizedMap.size());
+            log.info("[PIPE][{}] 2) NORMALIZED_MAP full(masked):\n{}",
+                    qid,
+                    prettyMapAsJson(maskMap(normalizedMap)));
+
+            Map<String, Rule> rules = rulesRegistry.snapshot();
+
+            // План по dataset (если нет — default)
+            java.util.List<FieldRuleBinding> bindings = planRegistry.getPlan(dataset);
+            if (bindings == null || bindings.isEmpty()) {
+                bindings = planRegistry.defaultPlan();
+            }
+            if (bindings == null || bindings.isEmpty()) {
+                log.warn("[PIPE][{}] No bindings plan found for dataset={}, skip", qid, dataset);
+                return null;
+            }
 
             ValidationResult validation = validationService.validate(
                     rules,
-                    profile.asStringMap(),
+                    normalizedMap,
                     bindings
             );
 
+            // 3) SHORT ANSWER (pretty + masked)
             String shortJson = shortAnswerService.build(originalEvent, validation);
             if (shortJson == null) {
-                log.warn("ShortAnswerService returned null. dfw_query_id={}",
-                        originalEvent.path("dfw_query_id").asText(null));
+                log.warn("[PIPE][{}] ShortAnswerService returned null.", qid);
                 return null;
             }
+            log.info("[PIPE][{}] 3) ANSWER_SHORT (masked):\n{}", qid, maskJsonPretty(shortJson));
 
+            // 4) DETAIL ANSWER (pretty + masked)
+            String detailJson = detailAnswerService.build(originalEvent, validation);
+            if (detailJson == null) {
+                log.warn("[PIPE][{}] DetailAnswerService returned null.", qid);
+            } else {
+                log.info("[PIPE][{}] 4) ANSWER_DETAIL (masked):\n{}", qid, maskJsonPretty(detailJson));
+            }
+
+            // в MQ отдаём short (как и было)
             return new MqReply(in.msgId, shortJson);
 
         } catch (Exception e) {
-            String s = in.payload;
-            String preview = s.length() > 200 ? s.substring(0, 200) : s;
-            log.error("Failed to build short answer. Payload(first 200)={}", preview, e);
+            log.error("Failed to build answers.", e);
             return null;
         }
     }
@@ -183,5 +203,80 @@ public class ShortAnswerMapFunction extends RichMapFunction<MqRecord, MqReply> {
         } catch (Exception e) {
             log.warn("Failed to close resources", e);
         }
+    }
+
+    // ---------------- helpers: pretty / masking ----------------
+
+    private String prettyMapAsJson(Map<String, String> m) {
+        if (m == null) return "null";
+        try {
+            Map<String, String> sorted = new TreeMap<>(m); // стабильный порядок
+            return mapper.writerWithDefaultPrettyPrinter().writeValueAsString(sorted);
+        } catch (Exception e) {
+            return m.toString();
+        }
+    }
+
+    private String maskJsonPretty(String json) {
+        if (json == null || json.isBlank()) return json;
+        try {
+            JsonNode root = mapper.readTree(json);
+            maskNode(root);
+            return mapper.writerWithDefaultPrettyPrinter().writeValueAsString(root);
+        } catch (Exception e) {
+            // если вдруг пришёл невалидный json — вернём как есть
+            return json;
+        }
+    }
+
+    private void maskNode(JsonNode node) {
+        if (node == null) return;
+        if (node.isObject()) {
+            Iterator<String> it = node.fieldNames();
+            while (it.hasNext()) {
+                String fn = it.next();
+                JsonNode child = node.get(fn);
+
+                if (isSensitiveKey(fn) && node instanceof com.fasterxml.jackson.databind.node.ObjectNode obj) {
+                    obj.put(fn, "***");
+                } else {
+                    maskNode(child);
+                }
+            }
+        } else if (node.isArray()) {
+            for (JsonNode child : node) maskNode(child);
+        }
+    }
+
+    private boolean isSensitiveKey(String key) {
+        if (key == null) return false;
+        String k = key.toLowerCase(Locale.ROOT);
+        return k.equals("birthdate")
+                || k.equals("clientsnils")
+                || k.equals("snils")
+                || k.equals("inn")
+                || k.equals("number")
+                || k.equals("series")
+                || k.equals("departmentcode");
+    }
+
+    private Map<String, String> maskMap(Map<String, String> m) {
+        if (m == null) return null;
+        Map<String, String> out = new LinkedHashMap<>();
+        for (Map.Entry<String, String> e : m.entrySet()) {
+            String k = e.getKey();
+            String v = e.getValue();
+
+            if (k != null && (isSensitiveKey(k)
+                    || k.toLowerCase(Locale.ROOT).contains("snils")
+                    || k.toLowerCase(Locale.ROOT).contains("birthdate")
+                    || k.toLowerCase(Locale.ROOT).contains("passport")
+                    || k.toLowerCase(Locale.ROOT).contains("number"))) {
+                out.put(k, "***");
+            } else {
+                out.put(k, v);
+            }
+        }
+        return out;
     }
 }

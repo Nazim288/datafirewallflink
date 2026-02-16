@@ -24,23 +24,40 @@ public class MqSource extends RichParallelSourceFunction<MqRecord> {
     private final String qmgr;
     private final String inQueue;
 
+    // ✅ добавили
+    private final String user;
+    private final String password;
+
     private transient MQQueueManager qm;
     private transient MQQueue queue;
 
+    // ✅ старый конструктор оставим, чтобы ничего не сломать
     public MqSource(String host, int port, String channel, String qmgr, String inQueue) {
+        this(host, port, channel, qmgr, inQueue, null, null);
+    }
+
+    // ✅ новый конструктор с кредами
+    public MqSource(String host, int port, String channel, String qmgr, String inQueue,
+                    String user, String password) {
         this.host = host;
         this.port = port;
         this.channel = channel;
         this.qmgr = qmgr;
         this.inQueue = inQueue;
+        this.user = user;
+        this.password = password;
     }
 
     @Override
     public void open(Configuration parameters) throws Exception {
         int subtask = getRuntimeContext().getIndexOfThisSubtask();
-        log.info("MqSource.open() subtask={} connecting to {}:{} qmgr={} channel={} queue={}",
-                subtask, host, port, qmgr, channel, inQueue);
-        qm = MqConnect.connect(qmgr, host, port, channel);
+
+        log.info("MqSource.open() subtask={} connecting to {}:{} qmgr={} channel={} queue={} user={}",
+                subtask, host, port, qmgr, channel, inQueue, user);
+
+        // ✅ ВАЖНО: теперь коннектимся с user/password
+        qm = MqConnect.connect(qmgr, host, port, channel, user, password);
+
         int openOptions = MQConstants.MQOO_INPUT_AS_Q_DEF | MQConstants.MQOO_FAIL_IF_QUIESCING;
         queue = qm.accessQueue(inQueue, openOptions);
 
@@ -50,6 +67,7 @@ public class MqSource extends RichParallelSourceFunction<MqRecord> {
     @Override
     public void run(SourceContext<MqRecord> ctx) throws Exception {
         int subtask = getRuntimeContext().getIndexOfThisSubtask();
+
         MQGetMessageOptions gmo = new MQGetMessageOptions();
         gmo.options = MQConstants.MQGMO_WAIT | MQConstants.MQGMO_FAIL_IF_QUIESCING;
         gmo.waitInterval = 1000;

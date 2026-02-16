@@ -22,24 +22,34 @@ public class MqSink extends RichSinkFunction<MqReply> {
     private final String qmgr;
     private final String outQueue;
 
+    private final String user;
+    private final String password;
+
     private transient MQQueueManager qm;
     private transient MQQueue queue;
 
-    public MqSink(String host, int port, String channel, String qmgr, String outQueue) {
+    public MqSink(String host, int port, String channel, String qmgr, String outQueue, String user, String password) {
         this.host = host;
         this.port = port;
         this.channel = channel;
         this.qmgr = qmgr;
         this.outQueue = outQueue;
+        this.user = user;
+        this.password = password;
     }
+
+    public MqSink(String host, int port, String channel, String qmgr, String outQueue) {
+        this(host, port, channel, qmgr, outQueue, null, null);
+    }
+
 
     @Override
     public void open(Configuration parameters) throws Exception {
         int subtask = getRuntimeContext().getIndexOfThisSubtask();
-        log.info("MqSink.open() subtask={} connecting to {}:{} qmgr={} channel={} queue={}",
-                subtask, host, port, qmgr, channel, outQueue);
+        log.info("MqSink.open() subtask={} connecting to {}:{} qmgr={} channel={} queue={} user={}",
+                subtask, host, port, qmgr, channel, outQueue, user);
 
-        qm = MqConnect.connect(qmgr, host, port, channel);
+        qm = MqConnect.connect(qmgr, host, port, channel, user, password);
 
         int openOptions = MQConstants.MQOO_OUTPUT | MQConstants.MQOO_FAIL_IF_QUIESCING;
         queue = qm.accessQueue(outQueue, openOptions);
@@ -56,7 +66,7 @@ public class MqSink extends RichSinkFunction<MqReply> {
 
         MQMessage msg = new MQMessage();
         msg.format = MQConstants.MQFMT_STRING;
-        msg.characterSet = 1208; // UTF-8
+        msg.characterSet = 1208;
 
         if (value.correlId != null) {
             msg.correlationId = value.correlId;

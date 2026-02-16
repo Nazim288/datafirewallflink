@@ -36,13 +36,19 @@ public class Main {
 
         JobConfig cfg = JobConfig.fromArgs(normalized);
 
+        // ✅ креды MQ (лучше хранить в cfg)
+        String mqUser = cfg.mqUser();
+        String mqPassword = cfg.mqPassword();
+
         env.addSource(
                         new MqSource(
                                 cfg.mqHost(),
                                 cfg.mqPort(),
                                 cfg.mqChannel(),
                                 cfg.mqQmgr(),
-                                cfg.mqInQueue()
+                                cfg.mqInQueue(),
+                                mqUser,
+                                mqPassword
                         ),
                         "mq-source"
                 )
@@ -63,7 +69,9 @@ public class Main {
                                 cfg.mqPort(),
                                 cfg.mqChannel(),
                                 cfg.mqQmgr(),
-                                cfg.mqOutQueue()
+                                cfg.mqOutQueue(),
+                                mqUser,
+                                mqPassword
                         )
                 )
                 .name("mq-sink")
