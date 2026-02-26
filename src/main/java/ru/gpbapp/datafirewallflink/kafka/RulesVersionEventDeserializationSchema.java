@@ -18,7 +18,6 @@ public class RulesVersionEventDeserializationSchema extends AbstractDeserializat
             long v = n.path("version").asLong(-1);
             return new RulesVersionEvent(v);
         } catch (Exception e) {
-                // если мусор — вернем "пустое" событие, обработчик его проигнорит
             return new RulesVersionEvent(-1);
         }
     }
