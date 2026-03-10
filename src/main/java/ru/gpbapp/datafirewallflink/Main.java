@@ -14,10 +14,10 @@ import org.slf4j.LoggerFactory;
 import ru.gpbapp.datafirewallflink.config.JobConfig;
 import ru.gpbapp.datafirewallflink.kafka.RulesVersionEvent;
 import ru.gpbapp.datafirewallflink.kafka.RulesVersionEventDeserializationSchema;
-import ru.gpbapp.datafirewallflink.mq.MqSink;
-import ru.gpbapp.datafirewallflink.mq.MqSource;
 import ru.gpbapp.datafirewallflink.mq.MqRecord;
 import ru.gpbapp.datafirewallflink.mq.MqReply;
+import ru.gpbapp.datafirewallflink.mq.MqSink;
+import ru.gpbapp.datafirewallflink.mq.MqSource;
 import ru.gpbapp.datafirewallflink.services.MqWithRulesReloadBroadcastProcessFunction;
 
 import java.util.ArrayList;
@@ -27,6 +27,150 @@ import java.util.Objects;
 public class Main {
 
     private static final Logger log = LoggerFactory.getLogger(Main.class);
+
+    // Тестовый JSON для режима --use.mq=false
+    private static final String TEST_JSON = """
+{
+  "dfw_hostname": "mkd-d32asl-wrk",
+  "dfw_user_login": "a_mkd_e_mq",
+  "dfw_readed_from_mq_dttm": "2025-09-01T12:02:50.4124228Z",
+  "dfw_action_dttm": "2025-09-01T12:02:50.4204910Z",
+  "dfw_action_type": "QUERY",
+  "dfw_created_dttm": "2025-09-01T12:02:50.394Z",
+  "dfw_dataset_code": "Дашборд.УС ЛИК",
+  "data": {
+    "homeAddress": {
+      "mapping.block": "АДРЕС.Строение",
+      "mapping.building": "none",
+      "mapping.areaType": "none",
+      "regionCode": "24",
+      "postalCode": "660043",
+      "mapping.area": "АДРЕС.Район",
+      "mapping.houseNumber": "none",
+      "regionType": "край",
+      "mapping.regionType": "none",
+      "area": null,
+      "dataset_code": "УС.ЛиК.Адрес проживания",
+      "flat": "48",
+      "block": null,
+      "regionName": "Красноярский",
+      "mapping.postalCode": "АДРЕС.Почтовый индекс",
+      "district": "Сибирский",
+      "settlement": null,
+      "mapping.district": "none",
+      "countryCode": "643",
+      "mapping.regionName": "АДРЕС.Наименование региона",
+      "areaType": null,
+      "building": null,
+      "mapping.countryCode": "АДРЕС.Код страны",
+      "mapping.street": "АДРЕС.Улица",
+      "houseNumber": "67",
+      "mapping.regionCode": "none",
+      "street": "Березина",
+      "city": "Красноярск",
+      "mapping.countryName": "АДРЕС.Страна",
+      "mapping.flat": "none",
+      "countryName": "Россия",
+      "mapping.settlement": "АДРЕС.Населенный пункт",
+      "mapping.city": "АДРЕС.Наименование города"
+    },
+    "documents": {
+      "mapping.clientSnils": "ОСНОВНЫЕ СВЕДЕНИЯ.СНИЛС",
+      "clientInn": null,
+      "dataset_code": "УС.ЛиК .Документы клиента",
+      "clientIdCard": [
+        {
+          "issueAuthority": "ТП ОУФМС РОССИИ ПО МОСКОВСКОЙ ОБЛ.В ДМИТРОВСКОМ Р-НЕ В ПОС. ИШКЕ",
+          "mapping.issueDate": "ДУЛ.Паспорт РФ.Дата выдачи",
+          "mapping.primary": "ДУЛ.Паспорт РФ.Признак основного",
+          "mapping.issueAuthority": "ДУЛ.Паспорт РФ.Кем выдан",
+          "primary": true,
+          "number": "518273",
+          "expiryDate": null,
+          "mapping.series": "ДУЛ.Паспорт РФ.Серия",
+          "mapping.number": "ДУЛ.Паспорт РФ.Номер",
+          "mapping.expiryDate": "none",
+          "mapping.departmentCode": "ДУЛ.Паспорт РФ.Код подразделения",
+          "mapping.type": "ДУЛ.Паспорт РФ.Тип ДУЛ",
+          "type": "PASSPORT_RU",
+          "issueDate": "2021-12-29",
+          "elemId": "PASSPORT_RU",
+          "departmentCode": "500-020",
+          "series": "4621"
+        }
+      ],
+      "clientSnils": "344-889-028 21",
+      "mapping.clientInn": "ИНН.Номер свидетельства"
+    },
+    "registrationAddress": {
+      "mapping.block": "АДРЕС.Строение",
+      "mapping.building": "none",
+      "mapping.areaType": "none",
+      "regionCode": "24",
+      "postalCode": "660043",
+      "mapping.area": "АДРЕС.Район",
+      "mapping.houseNumber": "none",
+      "regionType": "край",
+      "mapping.regionType": "none",
+      "area": null,
+      "dataset_code": "УС.ЛиК.Адрес регистрации",
+      "flat": "48",
+      "block": null,
+      "regionName": "Красноярский",
+      "mapping.postalCode": "АДРЕС.Почтовый индекс",
+      "district": "Сибирский",
+      "settlement": null,
+      "mapping.district": "none",
+      "countryCode": "643",
+      "mapping.regionName": "АДРЕС.Наименование региона",
+      "areaType": null,
+      "building": null,
+      "mapping.countryCode": "АДРЕС.Код страны",
+      "mapping.street": "АДРЕС.Улица",
+      "houseNumber": "67",
+      "mapping.regionCode": "none",
+      "street": "Березина",
+      "city": "Красноярск",
+      "mapping.countryName": "АДРЕС.Страна",
+      "mapping.flat": "none",
+      "countryName": "Россия",
+      "mapping.settlement": "АДРЕС.Населенный пункт",
+      "mapping.city": "АДРЕС.Наименование города"
+    },
+    "contactInfo": {
+      "mobilePhone": "79859971243",
+      "dataset_code": "УС.ЛИК.Контакты клиента",
+      "mapping.emailValue": "КОНТАКТ.Почта.Электронный адрес (email)",
+      "mapping.mobilePhone": "КОНТАКТ.Телефон.Номер телефона",
+      "emailValue": "makogonenkoadel66@gmail.com"
+    },
+    "baseInfo": {
+      "birthCountry": "РОССИЙСКАЯ ФЕДЕРАЦИЯ",
+      "birthdate": "1976-10-30",
+      "mapping.surname": "ОСНОВНЫЕ СВЕДЕНИЯ.Фамилия",
+      "isPatronymicLack": null,
+      "gender": "FEMALE",
+      "dataset_code": "УС.ЛиК.Данные клиента",
+      "mapping.name": "ОСНОВНЫЕ СВЕДЕНИЯ.Имя",
+      "birthPlace": "Алтай",
+      "mapping.fullName": "ОСНОВНЫЕ СВЕДЕНИЯ.ФИО одной строкой",
+      "surname": "Макогоненко",
+      "mapping.birthPlace": "ОСНОВНЫЕ СВЕДЕНИЯ.Место рождения",
+      "mapping.isPatronymicLack": "ОСНОВНЫЕ СВЕДЕНИЯ.Признак отсутствия отчества",
+      "name": "Адель",
+      "fullName": "Макогоненко Адель Фроловна",
+      "mapping.patronymic": "ОСНОВНЫЕ СВЕДЕНИЯ.Отчество",
+      "mapping.birthdate": "ОСНОВНЫЕ СВЕДЕНИЯ.Дата рождения",
+      "patronymic": "Фроловна",
+      "citizenship": ["РОССИЙСКАЯ ФЕДЕРАЦИЯ"],
+      "mapping.citizenship": "ГРАЖДАНСТВО.Страна",
+      "mapping.birthCountry": "none",
+      "mapping.gender": "ОСНОВНЫЕ СВЕДЕНИЯ.Пол"
+    }
+  },
+  "dfw_query_id": "ID:05510000000000002b7a0bcb516145a0b7ee76c93dd53ece"
+}
+""";
 
     public static void main(String[] args) throws Exception {
 
@@ -44,25 +188,35 @@ public class Main {
         String mqUser = cfg.mqUser();
         String mqPassword = cfg.mqPassword();
 
-        // --- MQ stream ---
-        DataStream<MqRecord> mqStream = env.addSource(
-                        new MqSource(
-                                cfg.mqHost(),
-                                cfg.mqPort(),
-                                cfg.mqChannel(),
-                                cfg.mqQmgr(),
-                                cfg.mqInQueue(),
-                                mqUser,
-                                mqPassword
-                        ),
-                        "mq-source"
-                )
-                .name("mq-source")
-                .setParallelism(1);
+        boolean useMq = pt.getBoolean("use.mq", true);
+
+        // --- MQ stream (или тестовый JSON) ---
+        final DataStream<MqRecord> mqStream;
+
+        if (useMq) {
+            mqStream = env.addSource(
+                            new MqSource(
+                                    cfg.mqHost(),
+                                    cfg.mqPort(),
+                                    cfg.mqChannel(),
+                                    cfg.mqQmgr(),
+                                    cfg.mqInQueue(),
+                                    mqUser,
+                                    mqPassword
+                            ),
+                            "mq-source"
+                    )
+                    .name("mq-source")
+                    .setParallelism(1);
+        } else {
+            log.warn("TEST MODE: using hardcoded JSON instead of MQ. Set --use.mq=true to read from MQ.");
+            mqStream = env
+                    .fromElements(new MqRecord(new byte[0], TEST_JSON))
+                    .name("test-json-source")
+                    .setParallelism(1);
+        }
 
         // --- Kafka control stream ---
-        // параметры через args:
-        // --kafka.bootstrap=localhost:9092 --kafka.topic=dfw-rules --kafka.group=dfw-rules-group
         String bootstrap = pt.get("kafka.bootstrap", "localhost:9092");
         String topic = pt.get("kafka.topic", "dfw-rules");
         String group = pt.get("kafka.group", "dfw-rules-group");
@@ -80,18 +234,18 @@ public class Main {
                 .name("rules-kafka")
                 .setParallelism(1);
 
-                             // broadcast state: храним только последнюю примененную версию
+        // broadcast state: храним только последнюю примененную версию
         MapStateDescriptor<String, Long> bcDesc =
                 new MapStateDescriptor<>("rules-version-broadcast", Types.STRING, Types.LONG);
 
         BroadcastStream<RulesVersionEvent> bcUpdates = updates.broadcast(bcDesc);
 
-                            // --- connect MQ + broadcast updates ---
+        // --- connect MQ + broadcast updates ---
         DataStream<MqReply> processed = mqStream
                 .connect(bcUpdates)
                 .process(new MqWithRulesReloadBroadcastProcessFunction(bcDesc))
                 .name("mq-process-with-rules-reload")
-                .setParallelism(1); // можешь поднять, если MQ source позволит
+                .setParallelism(1);
 
         processed
                 .filter(Objects::nonNull)

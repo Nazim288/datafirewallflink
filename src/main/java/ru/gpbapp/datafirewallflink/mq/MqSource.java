@@ -7,110 +7,290 @@ import com.ibm.mq.MQQueue;
 import com.ibm.mq.MQQueueManager;
 import com.ibm.mq.constants.MQConstants;
 import org.apache.flink.configuration.Configuration;
-import org.apache.flink.streaming.api.functions.source.RichParallelSourceFunction;
+import org.apache.flink.streaming.api.functions.source.RichSourceFunction;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.Locale;
+import java.util.Map;
 
-public class MqSource extends RichParallelSourceFunction<MqRecord> {
+public class MqSource extends RichSourceFunction<MqRecord> {
+
     private static final Logger log = LoggerFactory.getLogger(MqSource.class);
-    private volatile boolean running = true;
+
+    private static final Map<Integer, Charset> CCSID_MAP = Map.ofEntries(
+            Map.entry(1208, StandardCharsets.UTF_8),
+            Map.entry(1200, StandardCharsets.UTF_16),
+            Map.entry(819, StandardCharsets.ISO_8859_1),
+            Map.entry(1251, Charset.forName("windows-1251")),
+            Map.entry(1252, Charset.forName("windows-1252")),
+            Map.entry(866, Charset.forName("Cp866")),
+            Map.entry(850, Charset.forName("Cp850"))
+    );
+
+    private final boolean logPayloads;
+    private final int logPreviewLen;
 
     private final String host;
     private final int port;
     private final String channel;
     private final String qmgr;
-    private final String inQueue;
-
-    // ✅ добавили
+    private final String queueName;
     private final String user;
     private final String password;
 
-    private transient MQQueueManager qm;
+    private final int waitIntervalMs;
+
+    private transient volatile boolean running;
+
+    private transient MQQueueManager qMgr;
     private transient MQQueue queue;
 
-    // ✅ старый конструктор оставим, чтобы ничего не сломать
-    public MqSource(String host, int port, String channel, String qmgr, String inQueue) {
-        this(host, port, channel, qmgr, inQueue, null, null);
+    /**
+     * Конструктор ровно под твой вызов:
+     * new MqSource(host, port, channel, qmgr, queue, user, password)
+     */
+    public MqSource(
+            String host,
+            int port,
+            String channel,
+            String qmgr,
+            String queueName,
+            String user,
+            String password
+    ) {
+        this(host, port, channel, qmgr, queueName, user, password,
+                false, 600, 1000);
     }
 
-    // ✅ новый конструктор с кредами
-    public MqSource(String host, int port, String channel, String qmgr, String inQueue,
-                    String user, String password) {
+    /**
+     * Расширенный конструктор (если захочешь управлять логами и wait)
+     */
+    public MqSource(
+            String host,
+            int port,
+            String channel,
+            String qmgr,
+            String queueName,
+            String user,
+            String password,
+            boolean logPayloads,
+            int logPreviewLen,
+            int waitIntervalMs
+    ) {
         this.host = host;
         this.port = port;
         this.channel = channel;
         this.qmgr = qmgr;
-        this.inQueue = inQueue;
+        this.queueName = queueName;
         this.user = user;
         this.password = password;
+
+        this.logPayloads = logPayloads;
+        this.logPreviewLen = logPreviewLen;
+        this.waitIntervalMs = waitIntervalMs;
     }
 
     @Override
     public void open(Configuration parameters) throws Exception {
-        int subtask = getRuntimeContext().getIndexOfThisSubtask();
 
-        log.info("MqSource.open() subtask={} connecting to {}:{} qmgr={} channel={} queue={} user={}",
-                subtask, host, port, qmgr, channel, inQueue, user);
+        this.running = true;
 
-        // ✅ ВАЖНО: теперь коннектимся с user/password
-        qm = MqConnect.connect(qmgr, host, port, channel, user, password);
+        int openOptions =
+                MQConstants.MQOO_INPUT_AS_Q_DEF |
+                        MQConstants.MQOO_FAIL_IF_QUIESCING;
 
-        int openOptions = MQConstants.MQOO_INPUT_AS_Q_DEF | MQConstants.MQOO_FAIL_IF_QUIESCING;
-        queue = qm.accessQueue(inQueue, openOptions);
+        log.info(
+                "MqSource.open() subtask={} connecting to {}:{} qmgr={} channel={} queue={} user={}",
+                getRuntimeContext().getIndexOfThisSubtask(),
+                host, port, qmgr, channel, queueName, user
+        );
 
-        log.info("MqSource opened queue={} subtask={}", inQueue, subtask);
+        qMgr = MqConnect.connect(qmgr, host, port, channel, user, password);
+        queue = qMgr.accessQueue(queueName, openOptions);
+
+        log.info(
+                "MqSource opened queue={} subtask={} log.payloads={} log.preview.len={} wait.ms={}",
+                queueName,
+                getRuntimeContext().getIndexOfThisSubtask(),
+                logPayloads,
+                logPreviewLen,
+                waitIntervalMs
+        );
     }
 
     @Override
     public void run(SourceContext<MqRecord> ctx) throws Exception {
-        int subtask = getRuntimeContext().getIndexOfThisSubtask();
 
         MQGetMessageOptions gmo = new MQGetMessageOptions();
-        gmo.options = MQConstants.MQGMO_WAIT | MQConstants.MQGMO_FAIL_IF_QUIESCING;
-        gmo.waitInterval = 1000;
+        gmo.options =
+                MQConstants.MQGMO_WAIT |
+                        MQConstants.MQGMO_FAIL_IF_QUIESCING;
+        gmo.waitInterval = waitIntervalMs;
 
         while (running) {
+
+            MQMessage msg = new MQMessage();
+
             try {
-                MQMessage msg = new MQMessage();
                 queue.get(msg, gmo);
 
-                byte[] data = new byte[msg.getDataLength()];
-                msg.readFully(data);
+                int messageLength = msg.getMessageLength();
+                int dataLength = msg.getDataLength();
 
-                String body = new String(data, StandardCharsets.UTF_8);
-                byte[] msgIdCopy = Arrays.copyOf(msg.messageId, msg.messageId.length);
+                log.debug("MQ message props: ccsid={} encoding={} format={} dataLength={} msgLength={}",
+                        msg.characterSet, msg.encoding, msg.format, dataLength, messageLength);
 
-                synchronized (ctx.getCheckpointLock()) {
-                    ctx.collect(new MqRecord(msgIdCopy, body));
+                byte[] buf = new byte[dataLength];
+                msg.readFully(buf);
+
+                Charset cs = detectCharset(msg);
+                String body = new String(buf, cs);
+
+                byte[] msgIdBytes = Arrays.copyOf(msg.messageId, msg.messageId.length);
+                String msgIdHex = toHexSafe(msgIdBytes);
+
+                boolean endsWithJsonClose = body != null && body.trim().endsWith("}");
+
+                log.info(
+                        "MQ READ subtask={} msgIdLen={} messageLength={} dataLength={} bytesRead={} bodyChars={} endsWithJsonClose={}",
+                        getRuntimeContext().getIndexOfThisSubtask(),
+                        msgIdBytes.length,
+                        messageLength,
+                        dataLength,
+                        buf.length,
+                        body.length(),
+                        endsWithJsonClose
+                );
+
+                if (logPayloads) {
+                    log.info("MQ READ msgId={} BODY:\n{}", msgIdHex, body);
+                } else {
+                    log.info("MQ READ msgId={} BODY preview={}", msgIdHex, preview(body, logPreviewLen));
                 }
 
-            } catch (MQException e) {
-                if (!running) break;
+                ctx.collect(new MqRecord(msgIdBytes, body));
 
-                if (e.reasonCode != MQConstants.MQRC_NO_MSG_AVAILABLE) {
-                    log.error("MQ error in source subtask={} reasonCode={} msg={}",
-                            subtask, e.reasonCode, e.getMessage(), e);
-                    throw e;
+            } catch (MQException mqe) {
+
+                if (mqe.reasonCode == MQConstants.MQRC_NO_MSG_AVAILABLE) {
+                    continue;
                 }
+
+                log.error(
+                        "MQ GET failed (completionCode={}, reasonCode={})",
+                        mqe.completionCode,
+                        mqe.reasonCode,
+                        mqe
+                );
+
+                throw mqe;
             }
         }
-
-        log.info("MqSource stopped subtask={}", subtask);
     }
 
     @Override
     public void cancel() {
         running = false;
-        try { if (queue != null) queue.close(); } catch (Exception ignore) {}
-        try { if (qm != null) qm.disconnect(); } catch (Exception ignore) {}
     }
 
     @Override
     public void close() {
-        try { if (queue != null) queue.close(); } catch (Exception ignore) {}
-        try { if (qm != null) qm.disconnect(); } catch (Exception ignore) {}
+
+        running = false;
+
+        try {
+            if (queue != null) queue.close();
+        } catch (Exception e) {
+            log.warn("Failed to close MQQueue", e);
+        }
+
+        try {
+            if (qMgr != null) qMgr.disconnect();
+        } catch (Exception e) {
+            log.warn("Failed to disconnect MQQueueManager", e);
+        }
+    }
+
+    /**
+     * Безопасный выбор Charset:
+     * - никогда не вызовет Charset.forName("IBM") или Charset.forName("Cp") без цифр
+     * - не использует IBM-xxxx (обычно не существует)
+     */
+    private Charset detectCharset(MQMessage msg) {
+
+        int ccsid = msg.characterSet;
+
+        if (ccsid <= 0) {
+            return StandardCharsets.UTF_8;
+        }
+
+        Charset mapped = CCSID_MAP.get(ccsid);
+        if (mapped != null) {
+            return mapped;
+        }
+
+        Charset cs = tryCharset("Cp" + ccsid);
+        if (cs != null) return cs;
+
+        cs = tryCharset("IBM" + ccsid);
+        if (cs != null) return cs;
+
+        cs = tryCharset("x-IBM" + ccsid);
+        if (cs != null) return cs;
+
+        log.debug("Unknown CCSID={} -> fallback UTF-8", ccsid);
+        return StandardCharsets.UTF_8;
+    }
+
+    /**
+     * Не даём случайно вызвать Charset.forName() с "IBM" / "Cp" и т.п.
+     */
+    private Charset tryCharset(String name) {
+        if (name == null) return null;
+
+        String n = name.trim();
+        if (n.isEmpty()) return null;
+
+        boolean hasDigit = false;
+        for (int i = 0; i < n.length(); i++) {
+            if (Character.isDigit(n.charAt(i))) {
+                hasDigit = true;
+                break;
+            }
+        }
+        if (!hasDigit) {
+            log.debug("Skip charset candidate (no digits): '{}'", n);
+            return null;
+        }
+
+        try {
+            return Charset.forName(n);
+        } catch (Exception e) {
+            log.debug("Charset not supported: '{}'", n);
+            return null;
+        }
+    }
+
+    private static String preview(String s, int max) {
+        if (s == null) return "null";
+        if (s.length() <= max) return s;
+        return s.substring(0, max) + "...(+" + (s.length() - max) + " chars)";
+    }
+
+    private static String toHexSafe(byte[] bytes) {
+
+        if (bytes == null) return "null";
+
+        StringBuilder sb = new StringBuilder(bytes.length * 2);
+
+        for (byte b : bytes) {
+            sb.append(String.format(Locale.ROOT, "%02X", b));
+        }
+
+        return sb.toString();
     }
 }

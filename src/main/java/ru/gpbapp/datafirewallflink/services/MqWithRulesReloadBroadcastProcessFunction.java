@@ -14,7 +14,7 @@ import org.apache.flink.util.Collector;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import ru.gpbapp.datafirewallflink.config.IgniteRulesApiClient;
-import ru.gpbapp.datafirewallflink.dto.FlatProfileDto;
+import ru.gpbapp.datafirewallflink.converter.MappingNormalizer;
 import ru.gpbapp.datafirewallflink.dto.HttpBytecodeSource;
 import ru.gpbapp.datafirewallflink.ignite.BytecodeSource;
 import ru.gpbapp.datafirewallflink.ignite.IgniteClientFacade;
@@ -24,13 +24,14 @@ import ru.gpbapp.datafirewallflink.kafka.RulesVersionEvent;
 import ru.gpbapp.datafirewallflink.mq.MqRecord;
 import ru.gpbapp.datafirewallflink.mq.MqReply;
 import ru.gpbapp.datafirewallflink.rule.CompiledRulesRegistry;
-import ru.gpbapp.datafirewallflink.rule.RulesApplyPlanRegistry;
+import ru.gpbapp.datafirewallflink.rule.RulePlan;
 import ru.gpbapp.datafirewallflink.rule.RulesReloader;
-import ru.gpbapp.datafirewallflink.validation.DetailsTemplateDynamic;
-import ru.gpbapp.datafirewallflink.validation.FieldRuleBinding;
 import ru.gpbapp.datafirewallflink.validation.ValidationResult;
 
-import java.util.*;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.Locale;
+import java.util.Map;
 
 public class MqWithRulesReloadBroadcastProcessFunction
         extends BroadcastProcessFunction<MqRecord, RulesVersionEvent, MqReply> {
@@ -42,20 +43,17 @@ public class MqWithRulesReloadBroadcastProcessFunction
     private final MapStateDescriptor<String, Long> rulesBroadcastDesc;
 
     private transient ObjectMapper mapper;
-    private transient JsonEventProcessor processor;
 
     private transient CompiledRulesRegistry rulesRegistry;
     private transient RulesReloader reloader;
     private transient BytecodeSource bytecodeSource;
-
     private transient AutoCloseable closeable;
 
-    private transient DetailsTemplateDynamic detailsTemplate;
     private transient ValidationService validationService;
     private transient ShortAnswerService shortAnswerService;
     private transient DetailAnswerService detailAnswerService;
 
-    private transient RulesApplyPlanRegistry planRegistry;
+    private transient MappingNormalizer normalizer;
 
     private transient String nameToLoad;
 
@@ -74,31 +72,24 @@ public class MqWithRulesReloadBroadcastProcessFunction
         if (pt == null) pt = ParameterTool.fromMap(Map.of());
 
         this.logPayloads = pt.getBoolean("log.payloads", false);
-        this.logPreviewLen = pt.getInt("log.preview.len", 600);
+        this.logPreviewLen = pt.getInt("log.preview.len", 600); // больше не используем для preview, оставим для совместимости
 
         this.rulesRegistry = new CompiledRulesRegistry();
-
         initRulesLoaderAndLoad(pt);
 
         this.mapper = new ObjectMapper();
-        this.processor = new JsonEventProcessor(mapper);
 
-        this.detailsTemplate = new DetailsTemplateDynamic(mapper);
-        this.validationService = new ValidationService(detailsTemplate);
+        this.validationService = new ValidationService();
         this.shortAnswerService = new ShortAnswerService(mapper);
         this.detailAnswerService = new DetailAnswerService(mapper);
 
-        this.planRegistry = new RulesApplyPlanRegistry();
+        this.normalizer = new MappingNormalizer(mapper);
 
-                // тестовый план !!!!! временно
-        this.planRegistry.buildRules();
-
-        log.info("[INIT] subtask={} log.payloads={} log.preview.len={} rulesLoaded={} planSize={}",
+        log.info("[INIT] subtask={} log.payloads={} (previewDisabled=true) rulesLoaded={} rulePlanFields={}",
                 rc.getIndexOfThisSubtask(),
                 logPayloads,
-                logPreviewLen,
-                rulesRegistry.snapshot().size(),
-                planRegistry.snapshot().size()
+                rulesRegistry.snapshot(),
+                RulePlan.FIELD_TO_RULES
         );
     }
 
@@ -136,10 +127,25 @@ public class MqWithRulesReloadBroadcastProcessFunction
 
         long t0 = System.nanoTime();
         reloader.reloadAllStrict(nameToLoad);
-        long ms = (System.nanoTime() - t0) / 1_000_000;
+        Map<String, Rule> rules = rulesRegistry.snapshot();
 
+        // --- debug: какие ключи реально лежат в registry ---
+        log.info("========== RULES REGISTRY DEBUG ==========");
+        log.info("Rules loaded count={}", rules.size());
+
+        rules.keySet()
+                .stream()
+                .sorted()
+                .forEach(key -> {
+                    String extractedId = key.replaceAll("\\D+", "");
+                    log.info("Rule key='{}' extractedId='{}'", key, extractedId);
+                });
+
+        log.info("===========================================");
+
+        long ms = (System.nanoTime() - t0) / 1_000_000;
         log.info("[RULES] initial reloadAllStrict('{}') finished in {}ms, loaded rules={}",
-                nameToLoad, ms, rulesRegistry.snapshot().size());
+                nameToLoad, ms, rules.size());
     }
 
     @Override
@@ -154,66 +160,46 @@ public class MqWithRulesReloadBroadcastProcessFunction
         try {
             JsonNode originalEvent = mapper.readTree(raw);
             String qid = originalEvent.path("dfw_query_id").asText("no-qid");
-            String dataset = originalEvent.path("dfw_dataset_code").asText("UNKNOWN_DATASET");
 
             ReadOnlyBroadcastState<String, Long> st = ctx.getBroadcastState(rulesBroadcastDesc);
             Long currentVersion = (st != null) ? st.get(KEY_VERSION) : null;
 
-            log.info("[PIPE][{}] using rulesVersion={} rulesCount={}",
-                    qid, currentVersion, rulesRegistry.snapshot().size());
+            log.info("[PIPE][{}] using rulesVersion={} rulesCount={} rulePlanFields={}",
+                    qid, currentVersion, rulesRegistry.snapshot().size(), RulePlan.FIELD_TO_RULES.size());
 
-            if (logPayloads) {
-                log.info("[PIPE][{}] 1) MQ_IN:\n{}", qid, maskJsonPretty(raw));
-            } else {
-                log.info("[PIPE][{}] 1) MQ_IN preview={}", qid, preview(maskInline(raw), logPreviewLen));
-            }
+            // 1) MQ_IN — всегда полный pretty (без preview/обрезаний)
+            log.info("[PIPE][{}] 1) MQ_IN:\n{}", qid, maskJsonPretty(raw));
 
-            FlatProfileDto profile = processor.toFlatProfile(originalEvent).orElse(null);
-            if (profile == null) {
-                log.warn("[PIPE][{}] Flat profile is null, skip.", qid);
-                return;
-            }
+            // 2) NORMALIZED_MAP
+            Map<String, String> normalizedMap = normalizer.normalize(originalEvent);
 
-            Map<String, String> normalizedMap = profile.asStringMap();
+            log.info("[PIPE][{}] 2) NORMALIZED_MAP size={} keys={}", qid, normalizedMap.size(), normalizedMap.keySet());
+            // значения в pretty-json (masked)
+            log.info("[PIPE][{}] 2) NORMALIZED_MAP full(masked):\n{}",
+                    qid,
+                    prettyObject(maskMap(normalizedMap)));
 
-            if (logPayloads) {
-                log.info("[PIPE][{}] 2) NORMALIZED_MAP size={} keys={}", qid, normalizedMap.size(), normalizedMap.keySet());
-                log.info("[PIPE][{}] 2) NORMALIZED_MAP values(masked)={}", qid, maskMap(normalizedMap));
-            } else {
-                log.info("[PIPE][{}] 2) NORMALIZED_MAP size={} keys={}", qid, normalizedMap.size(), normalizedMap.keySet());
-            }
+            Map<String, Rule> compiledRules = rulesRegistry.snapshot();
 
-            Map<String, Rule> rules = rulesRegistry.snapshot();
+            // Валидация по RulePlan.FIELD_TO_RULES
+            ValidationResult validation = validationService.validate(
+                    compiledRules,
+                    normalizedMap,
+                    RulePlan.FIELD_TO_RULES
+            );
 
-
-                      // пока беру тестовые планы без фильтра !!!!!
-            List<FieldRuleBinding> bindings = planRegistry.defaultPlan();
-            if (bindings == null || bindings.isEmpty()) {
-                log.warn("[PIPE][{}] No bindings plan found for dataset={}, skip", qid, dataset);
-                return;
-            }
-
-            ValidationResult validation = validationService.validate(rules, normalizedMap, bindings);
-
+            // SHORT ANSWER — всегда полный pretty (без preview/обрезаний)
             String shortJson = shortAnswerService.build(originalEvent, validation);
             if (shortJson == null) {
                 log.warn("[PIPE][{}] ShortAnswerService returned null.", qid);
                 return;
             }
+            log.info("[PIPE][{}] 3) ANSWER_SHORT:\n{}", qid, maskJsonPretty(shortJson));
 
-            if (logPayloads) {
-                log.info("[PIPE][{}] 3) ANSWER_SHORT:\n{}", qid, maskJsonPretty(shortJson));
-            } else {
-                log.info("[PIPE][{}] 3) ANSWER_SHORT preview={}", qid, preview(maskInline(shortJson), logPreviewLen));
-            }
-
+            //  DETAIL ANSWER — всегда полный pretty (без preview/обрезаний)
             String detailJson = detailAnswerService.build(originalEvent, validation);
             if (detailJson != null) {
-                if (logPayloads) {
-                    log.info("[PIPE][{}] 4) ANSWER_DETAIL:\n{}", qid, maskJsonPretty(detailJson));
-                } else {
-                    log.info("[PIPE][{}] 4) ANSWER_DETAIL preview={}", qid, preview(maskInline(detailJson), logPreviewLen));
-                }
+                log.info("[PIPE][{}] 4) ANSWER_DETAIL:\n{}", qid, maskJsonPretty(detailJson));
             } else {
                 log.warn("[PIPE][{}] DetailAnswerService returned null.", qid);
             }
@@ -263,11 +249,14 @@ public class MqWithRulesReloadBroadcastProcessFunction
         }
     }
 
+    // ---------------- helpers ----------------
 
-    private String preview(String s, int max) {
-        if (s == null) return "null";
-        if (s.length() <= max) return s;
-        return s.substring(0, max) + "...(+" + (s.length() - max) + " chars)";
+    private String prettyObject(Object o) {
+        try {
+            return mapper.writerWithDefaultPrettyPrinter().writeValueAsString(o);
+        } catch (Exception e) {
+            return String.valueOf(o);
+        }
     }
 
     private String maskInline(String s) {
@@ -328,6 +317,7 @@ public class MqWithRulesReloadBroadcastProcessFunction
         for (Map.Entry<String, String> e : m.entrySet()) {
             String k = e.getKey();
             String v = e.getValue();
+
             if (k != null && (isSensitiveKey(k)
                     || k.toLowerCase(Locale.ROOT).contains("snils")
                     || k.toLowerCase(Locale.ROOT).contains("birthdate")

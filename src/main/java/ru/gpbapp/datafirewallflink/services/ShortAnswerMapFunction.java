@@ -1,4 +1,3 @@
-// ShortAnswerMapFunction.java
 package ru.gpbapp.datafirewallflink.services;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -10,7 +9,7 @@ import org.apache.flink.configuration.Configuration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import ru.gpbapp.datafirewallflink.config.IgniteRulesApiClient;
-import ru.gpbapp.datafirewallflink.dto.FlatProfileDto;
+import ru.gpbapp.datafirewallflink.converter.MappingNormalizer;
 import ru.gpbapp.datafirewallflink.dto.HttpBytecodeSource;
 import ru.gpbapp.datafirewallflink.ignite.BytecodeSource;
 import ru.gpbapp.datafirewallflink.ignite.IgniteClientFacade;
@@ -19,10 +18,7 @@ import ru.gpbapp.datafirewallflink.ignite.impl.IgniteClientFacadeImpl;
 import ru.gpbapp.datafirewallflink.mq.MqRecord;
 import ru.gpbapp.datafirewallflink.mq.MqReply;
 import ru.gpbapp.datafirewallflink.rule.CompiledRulesRegistry;
-import ru.gpbapp.datafirewallflink.rule.RulesApplyPlanRegistry;
 import ru.gpbapp.datafirewallflink.rule.RulesReloader;
-import ru.gpbapp.datafirewallflink.validation.DetailsTemplateDynamic;
-import ru.gpbapp.datafirewallflink.validation.FieldRuleBinding;
 import ru.gpbapp.datafirewallflink.validation.ValidationResult;
 
 import java.util.Iterator;
@@ -36,20 +32,17 @@ public class ShortAnswerMapFunction extends RichMapFunction<MqRecord, MqReply> {
     private static final Logger log = LoggerFactory.getLogger(ShortAnswerMapFunction.class);
 
     private transient ObjectMapper mapper;
-    private transient JsonEventProcessor processor;
 
     private transient CompiledRulesRegistry rulesRegistry;
     private transient RulesReloader reloader;
     private transient BytecodeSource bytecodeSource;
-
     private transient AutoCloseable closeable;
 
-    private transient DetailsTemplateDynamic detailsTemplate;
     private transient ValidationService validationService;
     private transient ShortAnswerService shortAnswerService;
     private transient DetailAnswerService detailAnswerService;
 
-    private transient RulesApplyPlanRegistry planRegistry;
+    private transient MappingNormalizer normalizer;
 
     @Override
     public void open(Configuration parameters) {
@@ -72,10 +65,8 @@ public class ShortAnswerMapFunction extends RichMapFunction<MqRecord, MqReply> {
         if ("http".equals(mode)) {
             String igniteApiUrl = pt != null ? pt.get("ignite.apiUrl", "http://127.0.0.1:8080") : "http://127.0.0.1:8080";
             IgniteRulesApiClient apiClient = new IgniteRulesApiClient(igniteApiUrl);
-
             rawSource = new HttpBytecodeSource(apiClient);
             this.closeable = null;
-
             log.info("[RULES] loader=http apiUrl={} sourceName={}", igniteApiUrl, sourceName);
 
         } else if ("thin".equals(mode)) {
@@ -104,22 +95,19 @@ public class ShortAnswerMapFunction extends RichMapFunction<MqRecord, MqReply> {
         long ms = (System.nanoTime() - t0) / 1_000_000;
 
         Map<String, Rule> rules = rulesRegistry.snapshot();
-        log.info("[RULES] reloadAllStrict('{}') finished in {}ms, loaded rules={}", nameToLoad, ms, rules.size());
-        log.info("[RULES] loaded keys={}", rules.keySet());
 
-        this.processor = new JsonEventProcessor(mapper);
+        log.info("[RULES_REGISTRY] loadedRulesCount={}", rules.size());
 
-        this.detailsTemplate = new DetailsTemplateDynamic(mapper);
-        this.validationService = new ValidationService(detailsTemplate);
+        rules.keySet().stream()
+                .sorted()
+                .forEach(k -> log.info("[RULES_REGISTRY] ruleKey={}", k));
+
+        this.validationService = new ValidationService();
         this.shortAnswerService = new ShortAnswerService(mapper);
         this.detailAnswerService = new DetailAnswerService(mapper);
 
-        this.planRegistry = new RulesApplyPlanRegistry();
+        this.normalizer = new MappingNormalizer(mapper);
 
-        /// ДЛЯ ТЕСТА ПОТОМ ПЕРЕДЕЛАЮ КАК НУЖНО!!!!
-        this.planRegistry.buildRules();
-
-        log.info("[PLAN] defaultPlan size={}", planRegistry.defaultPlan().size());
         log.info("[INIT] subtask={}", getRuntimeContext().getIndexOfThisSubtask());
     }
 
@@ -135,43 +123,26 @@ public class ShortAnswerMapFunction extends RichMapFunction<MqRecord, MqReply> {
         try {
             JsonNode originalEvent = mapper.readTree(raw);
             String qid = originalEvent.path("dfw_query_id").asText("no-qid");
-            String dataset = originalEvent.path("dfw_dataset_code").asText("UNKNOWN_DATASET");
 
             log.info("[PIPE][{}] 1) MQ_IN raw(masked):\n{}", qid, maskJsonPretty(raw));
 
-            FlatProfileDto profile = processor.toFlatProfile(originalEvent).orElse(null);
-            if (profile == null) {
-                log.warn("[PIPE][{}] Flat profile is null, skip.", qid);
-                return null;
-            }
+            // normalizedMap из mapping.* по всему event.data
+            Map<String, String> normalizedMap = normalizer.normalize(originalEvent);
 
-            Map<String, String> normalizedMap = profile.asStringMap();
-
-            // 2) NORMALIZED_MAP (pretty JSON + masked)
             log.info("[PIPE][{}] 2) NORMALIZED_MAP size={}", qid, normalizedMap.size());
             log.info("[PIPE][{}] 2) NORMALIZED_MAP full(masked):\n{}",
                     qid,
                     prettyMapAsJson(maskMap(normalizedMap)));
 
-            Map<String, Rule> rules = rulesRegistry.snapshot();
+            Map<String, Rule> compiledRules = rulesRegistry.snapshot();
 
-            // План по dataset (если нет — default)
-            java.util.List<FieldRuleBinding> bindings = planRegistry.getPlan(dataset);
-            if (bindings == null || bindings.isEmpty()) {
-                bindings = planRegistry.defaultPlan();
-            }
-            if (bindings == null || bindings.isEmpty()) {
-                log.warn("[PIPE][{}] No bindings plan found for dataset={}, skip", qid, dataset);
-                return null;
-            }
-
+            //применяем RulePlan.FIELD_TO_RULES
             ValidationResult validation = validationService.validate(
-                    rules,
+                    compiledRules,
                     normalizedMap,
-                    bindings
+                    ru.gpbapp.datafirewallflink.rule.RulePlan.FIELD_TO_RULES
             );
 
-            // 3) SHORT ANSWER (pretty + masked)
             String shortJson = shortAnswerService.build(originalEvent, validation);
             if (shortJson == null) {
                 log.warn("[PIPE][{}] ShortAnswerService returned null.", qid);
@@ -179,7 +150,6 @@ public class ShortAnswerMapFunction extends RichMapFunction<MqRecord, MqReply> {
             }
             log.info("[PIPE][{}] 3) ANSWER_SHORT (masked):\n{}", qid, maskJsonPretty(shortJson));
 
-            // 4) DETAIL ANSWER (pretty + masked)
             String detailJson = detailAnswerService.build(originalEvent, validation);
             if (detailJson == null) {
                 log.warn("[PIPE][{}] DetailAnswerService returned null.", qid);
@@ -187,7 +157,6 @@ public class ShortAnswerMapFunction extends RichMapFunction<MqRecord, MqReply> {
                 log.info("[PIPE][{}] 4) ANSWER_DETAIL (masked):\n{}", qid, maskJsonPretty(detailJson));
             }
 
-            // в MQ отдаём short (как и было)
             return new MqReply(in.msgId, shortJson);
 
         } catch (Exception e) {
@@ -210,7 +179,7 @@ public class ShortAnswerMapFunction extends RichMapFunction<MqRecord, MqReply> {
     private String prettyMapAsJson(Map<String, String> m) {
         if (m == null) return "null";
         try {
-            Map<String, String> sorted = new TreeMap<>(m); // стабильный порядок
+            Map<String, String> sorted = new TreeMap<>(m);
             return mapper.writerWithDefaultPrettyPrinter().writeValueAsString(sorted);
         } catch (Exception e) {
             return m.toString();
@@ -224,7 +193,6 @@ public class ShortAnswerMapFunction extends RichMapFunction<MqRecord, MqReply> {
             maskNode(root);
             return mapper.writerWithDefaultPrettyPrinter().writeValueAsString(root);
         } catch (Exception e) {
-            // если вдруг пришёл невалидный json — вернём как есть
             return json;
         }
     }
