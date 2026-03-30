@@ -6,20 +6,27 @@ import org.apache.flink.api.common.serialization.AbstractDeserializationSchema;
 
 import java.nio.charset.StandardCharsets;
 
-public class RulesVersionEventDeserializationSchema extends AbstractDeserializationSchema<RulesVersionEvent> {
+public class CacheUpdateEventDeserializationSchema
+        extends AbstractDeserializationSchema<CacheUpdateEvent> {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     @Override
-    public RulesVersionEvent deserialize(byte[] message) {
+    public CacheUpdateEvent deserialize(byte[] message) {
         try {
             String s = new String(message, StandardCharsets.UTF_8);
             JsonNode n = MAPPER.readTree(s);
-            long v = n.path("version").asLong(-1);
-            return new RulesVersionEvent(v);
+
+            long version = n.path("version").asLong(-1);
+            String cacheName = n.path("cacheName").asText(null);
+
+            if (cacheName != null) {
+                cacheName = cacheName.trim();
+            }
+
+            return new CacheUpdateEvent(version, cacheName);
         } catch (Exception e) {
-            return new RulesVersionEvent(-1);
+            return new CacheUpdateEvent(-1, null);
         }
     }
 }
-

@@ -3,65 +3,82 @@ package ru.gpbapp.datafirewallflink.services;
 import com.gpb.datafirewall.model.Rule;
 import ru.gpbapp.datafirewallflink.validation.ValidationResult;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeMap;
 
 import static ru.gpbapp.datafirewallflink.validation.DetailsTemplateValues.ERROR;
 import static ru.gpbapp.datafirewallflink.validation.DetailsTemplateValues.SUCCESS;
 
 public final class ValidationService {
 
-    public ValidationResult validate(Map<String, Rule> compiledRules,
-                                     Map<String, String> normalizedMap,
-                                     Map<String, Set<String>> fieldToRuleIds) {
-
-        if (compiledRules == null) compiledRules = Map.of();
-        if (normalizedMap == null) normalizedMap = Map.of();
-        if (fieldToRuleIds == null) fieldToRuleIds = Map.of();
+    public ValidationResult validate(
+            Map<String, Rule> compiledRules,
+            Map<String, String> normalizedMap,
+            Map<String, Set<String>> fieldToRuleIds
+    ) {
+        if (compiledRules == null) {
+            compiledRules = Map.of();
+        }
+        if (normalizedMap == null) {
+            normalizedMap = Map.of();
+        }
+        if (fieldToRuleIds == null) {
+            fieldToRuleIds = Map.of();
+        }
 
         boolean anyError = false;
         boolean anyException = false;
 
-        // logicalField -> (ruleId -> status)
+        // logicalField -> (ruleName -> status)
         Map<String, Map<String, String>> detailByField = new LinkedHashMap<>();
 
-        // стабильность порядка (для логов/сравнений)
+        // стабильный порядок полей
         Map<String, Set<String>> sortedFields = new TreeMap<>(fieldToRuleIds);
 
-        for (Map.Entry<String, Set<String>> e : sortedFields.entrySet()) {
-            String logicalField = e.getKey();
-            if (logicalField == null || logicalField.isBlank()) continue;
+        for (Map.Entry<String, Set<String>> entry : sortedFields.entrySet()) {
+            String logicalField = entry.getKey();
+            if (logicalField == null || logicalField.isBlank()) {
+                continue;
+            }
 
-            Set<String> ruleIds = e.getValue();
-            if (ruleIds == null || ruleIds.isEmpty()) continue;
+            Set<String> ruleNames = entry.getValue();
+            if (ruleNames == null || ruleNames.isEmpty()) {
+                continue;
+            }
 
             Map<String, String> perRules = new LinkedHashMap<>();
 
-            // сортируем ruleIds численно/лексикографически
-            List<String> sortedRuleIds = new ArrayList<>(ruleIds);
-            sortedRuleIds.sort(Comparator.naturalOrder());
+            List<String> sortedRuleNames = new ArrayList<>(ruleNames);
+            sortedRuleNames.sort(Comparator.naturalOrder());
 
-            for (String ruleId : sortedRuleIds) {
-                if (ruleId == null || ruleId.isBlank()) continue;
-
-                // В compiledRules ключи обычно вида Rule1065, а в detail/results нужен просто 1065
-                Rule rule = compiledRules.get(ruleId);
-                if (rule == null) {
-                    rule = compiledRules.get("Rule" + ruleId);
+            for (String ruleName : sortedRuleNames) {
+                if (ruleName == null || ruleName.isBlank()) {
+                    continue;
                 }
+
+                Rule rule = resolveRule(compiledRules, ruleName);
 
                 boolean triggered;
                 try {
                     // true = правило сработало = найдена ошибка
-                    triggered = (rule != null) && rule.apply(normalizedMap);
+                    triggered = rule != null && rule.apply(normalizedMap);
                 } catch (Exception ex) {
                     triggered = false;
                     anyException = true;
                 }
 
                 String status = triggered ? ERROR : SUCCESS;
-                if (triggered) anyError = true;
+                if (triggered) {
+                    anyError = true;
+                }
 
-                perRules.put(ruleId, status);
+                perRules.put(ruleName, status);
             }
 
             if (!perRules.isEmpty()) {
@@ -72,6 +89,33 @@ public final class ValidationService {
         String all = anyError ? ERROR : SUCCESS;
         String processStatus = anyException ? "RULE_EXCEPTION" : "OK";
 
-        return new ValidationResult(null, all, processStatus, Collections.unmodifiableMap(detailByField));
+        return new ValidationResult(
+                null,
+                all,
+                processStatus,
+                Collections.unmodifiableMap(detailByField)
+        );
+    }
+
+    private Rule resolveRule(Map<String, Rule> compiledRules, String ruleName) {
+        Rule rule = compiledRules.get(ruleName);
+        if (rule != null) {
+            return rule;
+        }
+
+        // fallback: если в кеше правил ключи с префиксом Rule, а сюда вдруг пришёл голый id
+        if (!ruleName.startsWith("Rule")) {
+            rule = compiledRules.get("Rule" + ruleName);
+            if (rule != null) {
+                return rule;
+            }
+        }
+
+        // fallback: если в compiledRules по какой-то причине ключ без префикса, а сюда пришёл Rule1140
+        if (ruleName.startsWith("Rule") && ruleName.length() > 4) {
+            return compiledRules.get(ruleName.substring(4));
+        }
+
+        return null;
     }
 }

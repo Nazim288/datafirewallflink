@@ -1,9 +1,14 @@
 package ru.gpbapp.datafirewallflink.rule;
 
-import ru.gpbapp.datafirewallflink.ignite.BytecodeSource;
 import com.gpb.datafirewall.model.Rule;
+import ru.gpbapp.datafirewallflink.cache.CompiledRulesRegistry;
+import ru.gpbapp.datafirewallflink.ignite.BytecodeSource;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 
 public final class RulesReloader {
 
@@ -36,7 +41,9 @@ public final class RulesReloader {
                 throw new IllegalStateException("Found empty/null class name key in '" + name + "'");
             }
             if (bytes == null || bytes.length == 0) {
-                throw new IllegalStateException("Empty bytecode for class '" + clsName + "' in '" + name + "'");
+                throw new IllegalStateException(
+                        "Empty bytecode for class '" + clsName + "' in '" + name + "'"
+                );
             }
             totalBytes += bytes.length;
         }
@@ -51,13 +58,33 @@ public final class RulesReloader {
                 newRules.put(clsName, rule);
             } catch (Throwable e) {
                 throw new RuntimeException(
-                        "Failed to load rule '" + clsName + "' from '" + name + "'. Available keys=" + classNames,
+                        "Failed to load rule '" + clsName + "' from '" + name +
+                                "'. Available keys=" + classNames,
                         e
                 );
             }
         }
 
-        registry.replaceAll(newRules);
+        String version = extractVersion(name);
+        registry.replaceAll(newRules, version);
+    }
 
+    private String extractVersion(String name) {
+        int idx = name.lastIndexOf('_');
+        if (idx < 0 || idx == name.length() - 1) {
+            throw new IllegalArgumentException(
+                    "Cannot extract version from cache name '" + name +
+                            "'. Expected format: <cache_name>_<version>"
+            );
+        }
+
+        String version = name.substring(idx + 1).trim();
+        if (version.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "Extracted empty version from cache name '" + name + "'"
+            );
+        }
+
+        return version;
     }
 }

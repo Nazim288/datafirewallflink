@@ -19,43 +19,63 @@ public final class HttpBytecodeSource implements BytecodeSource {
         this.apiClient = Objects.requireNonNull(apiClient, "apiClient");
     }
 
+    /**
+     * Загружает compiled rules из versioned cache по полному имени кэша.
+     *
+     * Пример fullCacheName:
+     * - compiled_rules_6
+     */
     @Override
-    public Map<String, byte[]> loadAll(String sourceName) {
-
+    public Map<String, byte[]> loadAll(String fullCacheName) {
         try {
-            CompiledRulesResponse resp = apiClient.getCompiledRules(sourceName);
-            Map<String, String> rules = (resp == null) ? null : resp.getRules();
+            CacheResponseDto<String, Object> resp = apiClient.getVersionedCache(fullCacheName);
+            Map<String, Object> cache = (resp == null) ? null : resp.getCache();
 
-            if (rules == null || rules.isEmpty()) {
+            if (cache == null || cache.isEmpty()) {
+                log.info("[RULES] http response fullCacheName={} count=0", fullCacheName);
                 return Map.of();
             }
 
             Base64.Decoder dec = Base64.getDecoder();
             Map<String, byte[]> out = new LinkedHashMap<>();
 
-            rules.entrySet().stream()
+            cache.entrySet().stream()
                     .sorted(Map.Entry.comparingByKey())
                     .forEach(e -> {
                         String key = e.getKey();
-                        String b64 = e.getValue();
+                        Object rawValue = e.getValue();
 
-                        if (key == null || key.isBlank() || b64 == null || b64.isBlank()) {
+                        if (key == null || key.isBlank() || rawValue == null) {
                             return;
                         }
 
                         try {
-                            out.put(key, dec.decode(b64));
+                            if (rawValue instanceof String b64) {
+                                if (!b64.isBlank()) {
+                                    out.put(key, dec.decode(b64));
+                                }
+                            } else {
+                                throw new IllegalArgumentException(
+                                        "Unexpected value type for key='" + key + "': " +
+                                                rawValue.getClass().getName()
+                                );
+                            }
                         } catch (IllegalArgumentException ex) {
-                            throw new IllegalArgumentException("Invalid base64 for key='" + key + "'", ex);
+                            throw new IllegalArgumentException(
+                                    "Invalid cache payload for key='" + key + "' in fullCacheName='" + fullCacheName + "'",
+                                    ex
+                            );
                         }
                     });
-            log.info("[RULES] http response cacheName={} sourceName={} count={}",
-                    resp.getCacheName(), resp.getSourceName(), resp.getCount());
 
+            log.info("[RULES] http response fullCacheName={} count={}", fullCacheName, out.size());
             return out;
 
         } catch (Exception e) {
-            throw new RuntimeException("Failed to load compiled rules via HTTP for sourceName=" + sourceName, e);
+            throw new RuntimeException(
+                    "Failed to load compiled rules via HTTP for fullCacheName=" + fullCacheName,
+                    e
+            );
         }
     }
 }

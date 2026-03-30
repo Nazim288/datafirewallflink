@@ -1,4 +1,4 @@
-package ru.gpbapp.datafirewallflink.ignite.impl;
+package ru.gpbapp.datafirewallflink.dto;
 
 import ru.gpbapp.datafirewallflink.ignite.BytecodeSource;
 import ru.gpbapp.datafirewallflink.ignite.IgniteClientFacade;

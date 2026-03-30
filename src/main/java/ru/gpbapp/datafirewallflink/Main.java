@@ -12,8 +12,8 @@ import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import ru.gpbapp.datafirewallflink.config.JobConfig;
-import ru.gpbapp.datafirewallflink.kafka.RulesVersionEvent;
-import ru.gpbapp.datafirewallflink.kafka.RulesVersionEventDeserializationSchema;
+import ru.gpbapp.datafirewallflink.kafka.CacheUpdateEvent;
+import ru.gpbapp.datafirewallflink.kafka.CacheUpdateEventDeserializationSchema;
 import ru.gpbapp.datafirewallflink.mq.MqRecord;
 import ru.gpbapp.datafirewallflink.mq.MqReply;
 import ru.gpbapp.datafirewallflink.mq.MqSink;
@@ -216,31 +216,35 @@ public class Main {
                     .setParallelism(1);
         }
 
-        // --- Kafka control stream ---
+// --- Kafka control stream ---
         String bootstrap = pt.get("kafka.bootstrap", "localhost:9092");
         String topic = pt.get("kafka.topic", "dfw-rules");
         String group = pt.get("kafka.group", "dfw-rules-group");
 
-        KafkaSource<RulesVersionEvent> kafkaSource = KafkaSource.<RulesVersionEvent>builder()
+        KafkaSource<CacheUpdateEvent> kafkaSource = KafkaSource.<CacheUpdateEvent>builder()
                 .setBootstrapServers(bootstrap)
                 .setTopics(topic)
                 .setGroupId(group)
                 .setStartingOffsets(OffsetsInitializer.latest())
-                .setValueOnlyDeserializer(new RulesVersionEventDeserializationSchema())
+                .setValueOnlyDeserializer(new CacheUpdateEventDeserializationSchema())
                 .build();
 
-        DataStream<RulesVersionEvent> updates = env
+        DataStream<CacheUpdateEvent> updates = env
                 .fromSource(kafkaSource, WatermarkStrategy.noWatermarks(), "rules-kafka")
                 .name("rules-kafka")
                 .setParallelism(1);
 
-        // broadcast state: храним только последнюю примененную версию
-        MapStateDescriptor<String, Long> bcDesc =
-                new MapStateDescriptor<>("rules-version-broadcast", Types.STRING, Types.LONG);
+// broadcast state: храним последнее событие обновления кэша
+        MapStateDescriptor<String, CacheUpdateEvent> bcDesc =
+                new MapStateDescriptor<>(
+                        "cache-update-broadcast",
+                        Types.STRING,
+                        Types.POJO(CacheUpdateEvent.class)
+                );
 
-        BroadcastStream<RulesVersionEvent> bcUpdates = updates.broadcast(bcDesc);
+        BroadcastStream<CacheUpdateEvent> bcUpdates = updates.broadcast(bcDesc);
 
-        // --- connect MQ + broadcast updates ---
+// --- connect MQ + broadcast updates ---
         DataStream<MqReply> processed = mqStream
                 .connect(bcUpdates)
                 .process(new MqWithRulesReloadBroadcastProcessFunction(bcDesc))

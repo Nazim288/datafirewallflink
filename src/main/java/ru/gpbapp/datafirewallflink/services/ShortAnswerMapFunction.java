@@ -13,11 +13,11 @@ import ru.gpbapp.datafirewallflink.converter.MappingNormalizer;
 import ru.gpbapp.datafirewallflink.dto.HttpBytecodeSource;
 import ru.gpbapp.datafirewallflink.ignite.BytecodeSource;
 import ru.gpbapp.datafirewallflink.ignite.IgniteClientFacade;
-import ru.gpbapp.datafirewallflink.ignite.impl.IgniteBytecodeSource;
+import ru.gpbapp.datafirewallflink.dto.IgniteBytecodeSource;
 import ru.gpbapp.datafirewallflink.ignite.impl.IgniteClientFacadeImpl;
 import ru.gpbapp.datafirewallflink.mq.MqRecord;
 import ru.gpbapp.datafirewallflink.mq.MqReply;
-import ru.gpbapp.datafirewallflink.rule.CompiledRulesRegistry;
+import ru.gpbapp.datafirewallflink.cache.CompiledRulesRegistry;
 import ru.gpbapp.datafirewallflink.rule.RulesReloader;
 import ru.gpbapp.datafirewallflink.validation.ValidationResult;
 

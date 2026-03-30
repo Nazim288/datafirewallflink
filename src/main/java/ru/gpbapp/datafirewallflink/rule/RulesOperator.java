@@ -8,12 +8,13 @@ import org.apache.flink.api.java.utils.ParameterTool;
 import org.apache.flink.configuration.Configuration;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import ru.gpbapp.datafirewallflink.cache.CompiledRulesRegistry;
 import ru.gpbapp.datafirewallflink.config.IgniteRulesApiClient;
 import ru.gpbapp.datafirewallflink.converter.MappingNormalizer;
 import ru.gpbapp.datafirewallflink.dto.HttpBytecodeSource;
 import ru.gpbapp.datafirewallflink.ignite.BytecodeSource;
 import ru.gpbapp.datafirewallflink.ignite.IgniteClientFacade;
-import ru.gpbapp.datafirewallflink.ignite.impl.IgniteBytecodeSource;
+import ru.gpbapp.datafirewallflink.dto.IgniteBytecodeSource;
 import ru.gpbapp.datafirewallflink.ignite.impl.IgniteClientFacadeImpl;
 import ru.gpbapp.datafirewallflink.services.DetailAnswerService;
 import ru.gpbapp.datafirewallflink.services.ShortAnswerService;
@@ -31,11 +32,8 @@ public class RulesOperator extends RichMapFunction<String, String> {
     private transient CompiledRulesRegistry registry;
     private transient RulesReloader reloader;
     private transient BytecodeSource bytecodeSource;
-
     private transient AutoCloseable closeable;
-
     private transient ObjectMapper mapper;
-
     private transient MappingNormalizer normalizer;
     private transient ValidationService validationService;
     private transient ShortAnswerService shortAnswerService;
@@ -51,10 +49,6 @@ public class RulesOperator extends RichMapFunction<String, String> {
 
         String mode = pt.get("rules.loader", "thin").toLowerCase(Locale.ROOT).trim();
 
-        String sourceName = pt.get("rules.sourceName", "my-source");
-        String cacheName = pt.get("ignite.cache", "compiled_" + sourceName);
-        String nameToLoad = "http".equals(mode) ? sourceName : cacheName;
-
         BytecodeSource rawSource;
 
         if ("http".equals(mode)) {
@@ -64,7 +58,7 @@ public class RulesOperator extends RichMapFunction<String, String> {
             rawSource = new HttpBytecodeSource(apiClient);
             this.closeable = null;
 
-            log.info("[RULES] loader=http apiUrl={} sourceName={}", igniteApiUrl, sourceName);
+            log.info("[RULES] loader=http apiUrl={}", igniteApiUrl);
 
         } else if ("thin".equals(mode)) {
             String igniteHost = pt.get("ignite.host", "127.0.0.1");
@@ -76,24 +70,18 @@ public class RulesOperator extends RichMapFunction<String, String> {
             rawSource = new IgniteBytecodeSource(facade);
             this.closeable = ignite;
 
-            log.info("[RULES] loader=thin host={} port={} cacheName={}", igniteHost, ignitePort, cacheName);
+            log.info("[RULES] loader=thin host={} port={}", igniteHost, ignitePort);
 
         } else {
             throw new IllegalArgumentException("Unknown rules.loader=" + mode + " (use thin|http)");
         }
 
-        this.bytecodeSource = new TimedBytecodeSource(rawSource, msg -> log.info(msg));
+        this.bytecodeSource = new TimedBytecodeSource(rawSource, log::info);
         this.reloader = new RulesReloader(bytecodeSource, registry);
 
-        long t0 = System.nanoTime();
-        reloader.reloadAllStrict(nameToLoad);
-        long ms = (System.nanoTime() - t0) / 1_000_000;
-
-        log.info("[RULES] reloadAllStrict('{}') finished in {}ms, loaded rules={}",
-                nameToLoad, ms, registry.snapshot().size());
+        log.info("[RULES] initial load is skipped. Waiting for versioned cache update event.");
 
         this.mapper = new ObjectMapper();
-
         this.normalizer = new MappingNormalizer(mapper);
         this.validationService = new ValidationService();
         this.shortAnswerService = new ShortAnswerService(mapper);
@@ -101,13 +89,15 @@ public class RulesOperator extends RichMapFunction<String, String> {
 
         log.info("[INIT] subtask={} rulesLoaded={} rulePlanFields={}",
                 getRuntimeContext().getIndexOfThisSubtask(),
-                registry.snapshot().size(),
+                registry.size(),
                 RulePlan.FIELD_TO_RULES.size());
     }
 
     @Override
     public String map(String value) {
-        if (value == null || value.isBlank()) return null;
+        if (value == null || value.isBlank()) {
+            return null;
+        }
 
         try {
             JsonNode original = mapper.readTree(value);
@@ -127,10 +117,7 @@ public class RulesOperator extends RichMapFunction<String, String> {
                     RulePlan.FIELD_TO_RULES
             );
 
-            String shortJson = shortAnswerService.build(original, validation);
-
-
-            return shortJson;
+            return shortAnswerService.build(original, validation);
 
         } catch (Exception e) {
             log.warn("RulesOperator failed to process event (first 200 chars): {}",
@@ -142,7 +129,9 @@ public class RulesOperator extends RichMapFunction<String, String> {
     @Override
     public void close() {
         try {
-            if (closeable != null) closeable.close();
+            if (closeable != null) {
+                closeable.close();
+            }
         } catch (Exception e) {
             log.warn("Failed to close rules resources", e);
         }
