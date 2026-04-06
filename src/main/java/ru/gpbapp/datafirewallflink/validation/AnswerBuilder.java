@@ -2,9 +2,11 @@ package ru.gpbapp.datafirewallflink.validation;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import java.time.Instant;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
@@ -44,6 +46,8 @@ public final class AnswerBuilder {
         out.put("PROCESS_STATUS", processStatus);
 
         out.set("details", buildShortDetails(originalEvent, validation));
+        out.set("errors", buildErrors(originalEvent, validation));
+
         return out;
     }
 
@@ -105,6 +109,128 @@ public final class AnswerBuilder {
         return details;
     }
 
+    private ObjectNode buildErrors(JsonNode originalEvent, ValidationResult validation) {
+        ObjectNode errors = mapper.createObjectNode();
+
+        Map<String, List<String>> errorsByField =
+                (validation == null || validation.errorsByField() == null)
+                        ? Map.of()
+                        : validation.errorsByField();
+
+        if (errorsByField.isEmpty()) {
+            return errors;
+        }
+
+        JsonNode data = (originalEvent == null) ? null : originalEvent.get("data");
+        if (data == null || !data.isObject()) {
+            return errors;
+        }
+
+        Iterator<Map.Entry<String, JsonNode>> it = data.fields();
+        while (it.hasNext()) {
+            Map.Entry<String, JsonNode> blockEntry = it.next();
+            String blockName = blockEntry.getKey();
+            JsonNode blockNode = blockEntry.getValue();
+
+            if (blockName == null || blockNode == null || !blockNode.isObject()) {
+                continue;
+            }
+
+            ObjectNode blockErrors = buildBlockErrors(blockNode, errorsByField);
+
+            if ("documents".equals(blockName)) {
+                ArrayNode cardsErrors = buildClientIdCardErrors(blockNode, errorsByField);
+                if (cardsErrors.size() > 0) {
+                    blockErrors.set("clientIdCard", cardsErrors);
+                }
+            }
+
+            if (blockErrors.size() > 0) {
+                errors.set(blockName, blockErrors);
+            }
+        }
+
+        return errors;
+    }
+
+    private ObjectNode buildBlockErrors(JsonNode blockNode, Map<String, List<String>> errorsByField) {
+        ObjectNode blockErrors = mapper.createObjectNode();
+
+        Iterator<Map.Entry<String, JsonNode>> fields = blockNode.fields();
+        while (fields.hasNext()) {
+            Map.Entry<String, JsonNode> e = fields.next();
+            String key = e.getKey();
+            JsonNode value = e.getValue();
+
+            if (key == null || !key.startsWith("mapping.") || value == null || value.isNull()) {
+                continue;
+            }
+
+            String localFieldName = key.substring("mapping.".length()).trim();
+            String logicalField = value.asText(null);
+
+            if (logicalField == null || logicalField.isBlank() || "none".equalsIgnoreCase(logicalField)) {
+                continue;
+            }
+
+            List<String> fieldErrors = findErrorsByLogicalField(errorsByField, logicalField);
+            if (fieldErrors != null && !fieldErrors.isEmpty()) {
+                ArrayNode arr = mapper.createArrayNode();
+                for (String msg : fieldErrors) {
+                    if (msg != null) {
+                        arr.add(msg);
+                    }
+                }
+                if (arr.size() > 0) {
+                    blockErrors.set(localFieldName, arr);
+                }
+            }
+        }
+
+        return blockErrors;
+    }
+
+    private ArrayNode buildClientIdCardErrors(JsonNode documentsNode, Map<String, List<String>> errorsByField) {
+        ArrayNode result = mapper.createArrayNode();
+
+        JsonNode cards = documentsNode == null ? null : documentsNode.get("clientIdCard");
+        if (cards == null || !cards.isArray() || cards.isEmpty()) {
+            return result;
+        }
+
+        for (JsonNode cardNode : cards) {
+            if (cardNode == null || !cardNode.isObject()) {
+                continue;
+            }
+
+            ObjectNode cardErrors = buildBlockErrors(cardNode, errorsByField);
+            if (cardErrors.size() > 0) {
+                result.add(cardErrors);
+            }
+        }
+
+        return result;
+    }
+
+    private List<String> findErrorsByLogicalField(Map<String, List<String>> errorsByField, String logicalField) {
+        if (logicalField == null || logicalField.isBlank() || errorsByField == null || errorsByField.isEmpty()) {
+            return null;
+        }
+
+        List<String> errors = errorsByField.get(logicalField);
+        if (errors != null && !errors.isEmpty()) {
+            return errors;
+        }
+
+        String alt = logicalField.replace('.', ',');
+        errors = errorsByField.get(alt);
+        if (errors != null && !errors.isEmpty()) {
+            return errors;
+        }
+
+        return null;
+    }
+
     private ObjectNode buildAddressShortNode(
             JsonNode addr,
             String datasetCode,
@@ -158,7 +284,7 @@ public final class AnswerBuilder {
         o.put("clientInn", statusByMappingFlexibleOld(docs, "mapping.clientInn", detailByField));
         o.put("clientSnils", statusByMappingFlexibleOld(docs, "mapping.clientSnils", detailByField));
 
-        var arr = mapper.createArrayNode();
+        ArrayNode arr = mapper.createArrayNode();
         JsonNode cards = docs == null ? null : docs.get("clientIdCard");
         if (cards != null && cards.isArray() && cards.size() > 0) {
             JsonNode card0 = cards.get(0);

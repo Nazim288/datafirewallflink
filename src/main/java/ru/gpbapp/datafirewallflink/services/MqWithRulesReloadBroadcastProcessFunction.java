@@ -33,9 +33,15 @@ import ru.gpbapp.datafirewallflink.mq.MqReply;
 import ru.gpbapp.datafirewallflink.rule.RulesReloader;
 import ru.gpbapp.datafirewallflink.validation.ValidationResult;
 
+import java.lang.reflect.Method;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
@@ -258,6 +264,7 @@ public class MqWithRulesReloadBroadcastProcessFunction
                     qid, datasetCode, controlArea, allFieldToRules.keySet());
 
             Map<String, String> normalizedMap = normalizer.normalize(originalEvent);
+            Map<String, String> errorMessagesByRule = getErrorMessagesSnapshot();
 
             if (logPayloads && log.isInfoEnabled()) {
                 log.info("[PIPE][{}] 2) NORMALIZED_MAP size={} keys={}",
@@ -269,7 +276,6 @@ public class MqWithRulesReloadBroadcastProcessFunction
 
             Map<String, Rule> compiledRules = rulesRegistry.snapshot();
 
-            // блоки, которые надо валидировать отдельно
             Set<String> excludedBlocks = politicsDatasetExclusionCache.get(controlArea);
             if (excludedBlocks == null) {
                 excludedBlocks = Set.of();
@@ -304,7 +310,6 @@ public class MqWithRulesReloadBroadcastProcessFunction
                 }
             }
 
-            // основной dataset без полей excluded blocks
             Map<String, String> mainNormalizedMap =
                     removeLogicalFields(normalizedMap, excludedLogicalFields);
 
@@ -320,7 +325,8 @@ public class MqWithRulesReloadBroadcastProcessFunction
             ValidationResult mainValidation = validationService.validate(
                     compiledRules,
                     mainEffectiveNormalizedMap,
-                    mainEffectiveFieldToRules
+                    mainEffectiveFieldToRules,
+                    errorMessagesByRule
             );
 
             Map<String, Map<String, String>> mergedDetailByField = new LinkedHashMap<>();
@@ -328,13 +334,15 @@ public class MqWithRulesReloadBroadcastProcessFunction
                 mergedDetailByField.putAll(mainValidation.detailByField());
             }
 
+            Map<String, List<String>> mergedErrorsByField = new LinkedHashMap<>();
+            mergeErrors(mergedErrorsByField, mainValidation.errorsByField());
+
             Map<String, Map<String, Map<String, String>>> mergedDetailByDataset = new LinkedHashMap<>();
             mergedDetailByDataset.put(datasetCode, safeFieldMap(mainValidation.detailByField()));
 
             boolean anyError = "ERROR".equalsIgnoreCase(mainValidation.allResult());
             boolean anyRuleException = "RULE_EXCEPTION".equalsIgnoreCase(mainValidation.processStatus());
 
-            // отдельная валидация excluded blocks
             for (String blockName : excludedBlocks) {
                 JsonNode blockNode = blockNodes.get(blockName);
                 if (blockNode == null || !blockNode.isObject()) {
@@ -351,8 +359,6 @@ public class MqWithRulesReloadBroadcastProcessFunction
                         excludedBlockNormalizedMaps.getOrDefault(blockName, Map.of());
 
                 Set<String> blockLogicalFields = collectLogicalFieldsFromBlock(blockNode);
-
-                // если mapping.* в блоке пустой/неполный — подстрахуемся реально найденными logical fields
                 blockLogicalFields.addAll(blockNormalizedMap.keySet());
 
                 Map<String, Set<String>> blockFieldToRules =
@@ -367,12 +373,15 @@ public class MqWithRulesReloadBroadcastProcessFunction
                 ValidationResult blockValidation = validationService.validate(
                         compiledRules,
                         blockEffectiveNormalizedMap,
-                        blockEffectiveFieldToRules
+                        blockEffectiveFieldToRules,
+                        errorMessagesByRule
                 );
 
                 if (blockValidation.detailByField() != null) {
                     mergedDetailByField.putAll(blockValidation.detailByField());
                 }
+                mergeErrors(mergedErrorsByField, blockValidation.errorsByField());
+
                 mergedDetailByDataset.put(blockDatasetCode, safeFieldMap(blockValidation.detailByField()));
 
                 if ("ERROR".equalsIgnoreCase(blockValidation.allResult())) {
@@ -388,7 +397,8 @@ public class MqWithRulesReloadBroadcastProcessFunction
                     anyError ? "ERROR" : "SUCCESS",
                     anyRuleException ? "RULE_EXCEPTION" : "OK",
                     Map.copyOf(mergedDetailByField),
-                    Map.copyOf(mergedDetailByDataset)
+                    Map.copyOf(mergedDetailByDataset),
+                    freezeErrors(mergedErrorsByField)
             );
 
             String shortJson = shortAnswerService.build(originalEvent, finalValidation);
@@ -707,12 +717,10 @@ public class MqWithRulesReloadBroadcastProcessFunction
 
         Boolean filterFlag = politicsFilterFlagCache.get(controlArea);
 
-        // false/null -> текущая логика
         if (!Boolean.TRUE.equals(filterFlag)) {
             return safeNormalized;
         }
 
-        // true -> добавляем все поля из fieldToRules, отсутствующие = null
         Map<String, String> effective = new LinkedHashMap<>();
 
         for (String logicalField : fieldToRules.keySet()) {
@@ -734,7 +742,6 @@ public class MqWithRulesReloadBroadcastProcessFunction
             effective.put(logicalField, null);
         }
 
-        // на всякий случай оставим и прочие фактически пришедшие поля
         for (Map.Entry<String, String> entry : safeNormalized.entrySet()) {
             effective.putIfAbsent(entry.getKey(), entry.getValue());
         }
@@ -758,6 +765,81 @@ public class MqWithRulesReloadBroadcastProcessFunction
 
     private Map<String, Map<String, String>> safeFieldMap(Map<String, Map<String, String>> source) {
         return source == null ? Map.of() : source;
+    }
+
+    private void mergeErrors(
+            Map<String, List<String>> target,
+            Map<String, List<String>> source
+    ) {
+        if (source == null || source.isEmpty()) {
+            return;
+        }
+
+        for (Map.Entry<String, List<String>> entry : source.entrySet()) {
+            String logicalField = entry.getKey();
+            List<String> messages = entry.getValue();
+
+            if (logicalField == null || logicalField.isBlank() || messages == null || messages.isEmpty()) {
+                continue;
+            }
+
+            LinkedHashSet<String> merged = new LinkedHashSet<>(target.getOrDefault(logicalField, List.of()));
+            for (String msg : messages) {
+                if (msg != null && !msg.isBlank()) {
+                    merged.add(msg);
+                }
+            }
+
+            if (!merged.isEmpty()) {
+                target.put(logicalField, new ArrayList<>(merged));
+            }
+        }
+    }
+
+    private Map<String, List<String>> freezeErrors(Map<String, List<String>> source) {
+        if (source == null || source.isEmpty()) {
+            return Map.of();
+        }
+
+        Map<String, List<String>> result = new LinkedHashMap<>();
+        for (Map.Entry<String, List<String>> entry : source.entrySet()) {
+            if (entry.getKey() == null || entry.getKey().isBlank()) {
+                continue;
+            }
+            List<String> messages = entry.getValue() == null ? List.of() : entry.getValue();
+            result.put(entry.getKey(), List.copyOf(messages));
+        }
+        return Map.copyOf(result);
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, String> getErrorMessagesSnapshot() {
+        if (politicsErrorMessagesCache == null) {
+            return Map.of();
+        }
+
+        try {
+            for (String methodName : List.of("snapshot", "asMap", "getAll")) {
+                try {
+                    Method m = politicsErrorMessagesCache.getClass().getMethod(methodName);
+                    Object value = m.invoke(politicsErrorMessagesCache);
+                    if (value instanceof Map<?, ?> raw) {
+                        Map<String, String> result = new LinkedHashMap<>();
+                        for (Map.Entry<?, ?> e : raw.entrySet()) {
+                            if (e.getKey() != null && e.getValue() != null) {
+                                result.put(String.valueOf(e.getKey()), String.valueOf(e.getValue()));
+                            }
+                        }
+                        return result;
+                    }
+                } catch (NoSuchMethodException ignored) {
+                }
+            }
+        } catch (Exception e) {
+            log.warn("[CACHE] failed to read politics error messages snapshot, using empty map", e);
+        }
+
+        return Map.of();
     }
 
     private Map<String, String> toStringMap(Map<String, Object> payload, String cacheName) {
@@ -969,7 +1051,6 @@ public class MqWithRulesReloadBroadcastProcessFunction
         return (v == null || v.isNull()) ? def : v.asText(def);
     }
 
-
     private void initTestCaches(ParameterTool pt) {
         String path = pt.get("test.politic.caches.path", "").trim();
 
@@ -982,9 +1063,9 @@ public class MqWithRulesReloadBroadcastProcessFunction
         try {
             ru.gpbapp.datafirewallflink.dto.TestCachesConfigDto cfg =
                     mapper.readValue(
-                            java.nio.file.Files.readString(
-                                    java.nio.file.Path.of(path),
-                                    java.nio.charset.StandardCharsets.UTF_8
+                            Files.readString(
+                                    Path.of(path),
+                                    StandardCharsets.UTF_8
                             ),
                             ru.gpbapp.datafirewallflink.dto.TestCachesConfigDto.class
                     );
@@ -1002,15 +1083,15 @@ public class MqWithRulesReloadBroadcastProcessFunction
 
             Map<String, Map<String, Set<String>>> controlAreaRules = new LinkedHashMap<>();
             if (cfg.getControlAreaRules() != null) {
-                for (Map.Entry<String, Map<String, java.util.List<String>>> areaEntry : cfg.getControlAreaRules().entrySet()) {
+                for (Map.Entry<String, Map<String, List<String>>> areaEntry : cfg.getControlAreaRules().entrySet()) {
                     Map<String, Set<String>> fieldRules = new LinkedHashMap<>();
                     if (areaEntry.getValue() != null) {
-                        for (Map.Entry<String, java.util.List<String>> fieldEntry : areaEntry.getValue().entrySet()) {
+                        for (Map.Entry<String, List<String>> fieldEntry : areaEntry.getValue().entrySet()) {
                             fieldRules.put(
                                     fieldEntry.getKey(),
                                     fieldEntry.getValue() == null
-                                            ? java.util.Set.of()
-                                            : new java.util.LinkedHashSet<>(fieldEntry.getValue())
+                                            ? Set.of()
+                                            : new LinkedHashSet<>(fieldEntry.getValue())
                             );
                         }
                     }
@@ -1020,12 +1101,12 @@ public class MqWithRulesReloadBroadcastProcessFunction
 
             Map<String, Set<String>> datasetExclusion = new LinkedHashMap<>();
             if (cfg.getDatasetExclusion() != null) {
-                for (Map.Entry<String, java.util.List<String>> entry : cfg.getDatasetExclusion().entrySet()) {
+                for (Map.Entry<String, List<String>> entry : cfg.getDatasetExclusion().entrySet()) {
                     datasetExclusion.put(
                             entry.getKey(),
                             entry.getValue() == null
-                                    ? java.util.Set.of()
-                                    : new java.util.LinkedHashSet<>(entry.getValue())
+                                    ? Set.of()
+                                    : new LinkedHashSet<>(entry.getValue())
                     );
                 }
             }
@@ -1057,5 +1138,4 @@ public class MqWithRulesReloadBroadcastProcessFunction
             throw new RuntimeException("Failed to initialize test caches from file: " + path, e);
         }
     }
-
 }

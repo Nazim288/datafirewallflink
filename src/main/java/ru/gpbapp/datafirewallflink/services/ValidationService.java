@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -22,6 +23,15 @@ public final class ValidationService {
             Map<String, String> normalizedMap,
             Map<String, Set<String>> fieldToRuleIds
     ) {
+        return validate(compiledRules, normalizedMap, fieldToRuleIds, Map.of());
+    }
+
+    public ValidationResult validate(
+            Map<String, Rule> compiledRules,
+            Map<String, String> normalizedMap,
+            Map<String, Set<String>> fieldToRuleIds,
+            Map<String, String> errorMessagesByRule
+    ) {
         if (compiledRules == null) {
             compiledRules = Map.of();
         }
@@ -31,12 +41,18 @@ public final class ValidationService {
         if (fieldToRuleIds == null) {
             fieldToRuleIds = Map.of();
         }
+        if (errorMessagesByRule == null) {
+            errorMessagesByRule = Map.of();
+        }
 
         boolean anyError = false;
         boolean anyException = false;
 
         // logicalField -> (ruleName -> status)
         Map<String, Map<String, String>> detailByField = new LinkedHashMap<>();
+
+        // logicalField -> [errorMessage1, errorMessage2, ...]
+        Map<String, List<String>> errorsByField = new LinkedHashMap<>();
 
         Map<String, Set<String>> sortedFields = new TreeMap<>(fieldToRuleIds);
 
@@ -52,6 +68,7 @@ public final class ValidationService {
             }
 
             Map<String, String> perRules = new LinkedHashMap<>();
+            Set<String> perFieldErrors = new LinkedHashSet<>();
 
             List<String> sortedRuleNames = new ArrayList<>(ruleNames);
             sortedRuleNames.sort(Comparator.naturalOrder());
@@ -65,6 +82,7 @@ public final class ValidationService {
 
                 boolean triggered;
                 try {
+                    // true = правило сработало = ошибка найдена
                     triggered = rule != null && rule.apply(normalizedMap);
                 } catch (Exception ex) {
                     triggered = false;
@@ -74,6 +92,7 @@ public final class ValidationService {
                 String status = triggered ? ERROR : SUCCESS;
                 if (triggered) {
                     anyError = true;
+                    perFieldErrors.add(resolveErrorMessage(ruleName, errorMessagesByRule));
                 }
 
                 perRules.put(ruleName, status);
@@ -81,6 +100,13 @@ public final class ValidationService {
 
             if (!perRules.isEmpty()) {
                 detailByField.put(logicalField, Collections.unmodifiableMap(perRules));
+            }
+
+            if (!perFieldErrors.isEmpty()) {
+                errorsByField.put(
+                        logicalField,
+                        Collections.unmodifiableList(new ArrayList<>(perFieldErrors))
+                );
             }
         }
 
@@ -92,8 +118,39 @@ public final class ValidationService {
                 all,
                 processStatus,
                 Collections.unmodifiableMap(detailByField),
-                Collections.emptyMap()
+                Collections.emptyMap(),
+                Collections.unmodifiableMap(errorsByField)
         );
+    }
+
+    private String resolveErrorMessage(
+            String ruleName,
+            Map<String, String> errorMessagesByRule
+    ) {
+        if (ruleName == null || ruleName.isBlank()) {
+            return "Не найден текст ошибки для неизвестного правила";
+        }
+
+        String direct = errorMessagesByRule.get(ruleName);
+        if (direct != null && !direct.isBlank()) {
+            return direct;
+        }
+
+        if (!ruleName.startsWith("Rule")) {
+            String prefixed = errorMessagesByRule.get("Rule" + ruleName);
+            if (prefixed != null && !prefixed.isBlank()) {
+                return prefixed;
+            }
+        }
+
+        if (ruleName.startsWith("Rule") && ruleName.length() > 4) {
+            String plain = errorMessagesByRule.get(ruleName.substring(4));
+            if (plain != null && !plain.isBlank()) {
+                return plain;
+            }
+        }
+
+        return "Не найден текст ошибки для " + ruleName;
     }
 
     private Rule resolveRule(Map<String, Rule> compiledRules, String ruleName) {

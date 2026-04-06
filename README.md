@@ -110,7 +110,7 @@ DataFirewallFlink — приложение для обработки и филь
 
 --test.json.path=/Users/kampus/Downloads/query_full.json \  # Путь к тестовому  входному JSON если запустить без MQ 
 
---mq.host=localhost \                          # MQ хост
+--mq.host=localhost \                           # MQ хост
 --mq.port=1414 \                               # MQ порт
 --mq.channel=DEV.APP.SVRCONN \                 # MQ канал
 --mq.qmgr=QM1 \                                # Queue manager

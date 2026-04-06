@@ -2,6 +2,7 @@ package ru.gpbapp.datafirewallflink.validation;
 
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
+import java.util.List;
 import java.util.Map;
 
 public record ValidationResult(
@@ -9,5 +10,6 @@ public record ValidationResult(
         String allResult,
         String processStatus,
         Map<String, Map<String, String>> detailByField,
-        Map<String, Map<String, Map<String, String>>> detailByDataset
+        Map<String, Map<String, Map<String, String>>> detailByDataset,
+        Map<String, List<String>> errorsByField
 ) {}
