@@ -1,8 +1,12 @@
 package ru.gpbapp.datafirewallflink.mq.artemis;
 
-import org.apache.flink.api.connector.source.*;
+import org.apache.flink.api.connector.source.Boundedness;
+import org.apache.flink.api.connector.source.Source;
+import org.apache.flink.api.connector.source.SourceReader;
+import org.apache.flink.api.connector.source.SourceReaderContext;
+import org.apache.flink.api.connector.source.SplitEnumerator;
+import org.apache.flink.api.connector.source.SplitEnumeratorContext;
 import org.apache.flink.core.io.SimpleVersionedSerializer;
-
 import ru.gpbapp.datafirewallflink.mq.BrokerRecord;
 
 import java.io.Serializable;
@@ -11,30 +15,48 @@ public class ArtemisSource implements Source<BrokerRecord, ArtemisSplit, Boolean
 
     private static final long serialVersionUID = 1L;
 
-    private final String brokerUrl;
+    private final String host;
+    private final int port;
     private final String inQueue;
     private final String user;
     private final String password;
     private final boolean logPayloads;
     private final int logPreviewLen;
     private final long receiveTimeoutMs;
+    private final boolean tlsEnabled;
+    private final String trustStorePath;
+    private final String trustStorePassword;
+    private final String keyStorePath;
+    private final String keyStorePassword;
 
     public ArtemisSource(
-            String brokerUrl,
+            String host,
+            int port,
             String inQueue,
             String user,
             String password,
             boolean logPayloads,
             int logPreviewLen,
-            long receiveTimeoutMs
+            long receiveTimeoutMs,
+            boolean tlsEnabled,
+            String trustStorePath,
+            String trustStorePassword,
+            String keyStorePath,
+            String keyStorePassword
     ) {
-        this.brokerUrl = brokerUrl;
+        this.host = host;
+        this.port = port;
         this.inQueue = inQueue;
         this.user = user;
         this.password = password;
         this.logPayloads = logPayloads;
         this.logPreviewLen = logPreviewLen;
         this.receiveTimeoutMs = receiveTimeoutMs;
+        this.tlsEnabled = tlsEnabled;
+        this.trustStorePath = trustStorePath;
+        this.trustStorePassword = trustStorePassword;
+        this.keyStorePath = keyStorePath;
+        this.keyStorePassword = keyStorePassword;
     }
 
     @Override
@@ -46,20 +68,24 @@ public class ArtemisSource implements Source<BrokerRecord, ArtemisSplit, Boolean
     public SourceReader<BrokerRecord, ArtemisSplit> createReader(SourceReaderContext readerContext) {
         return new ArtemisSourceReader(
                 readerContext.getIndexOfSubtask(),
-                brokerUrl,
+                host,
+                port,
                 inQueue,
                 user,
                 password,
                 logPayloads,
                 logPreviewLen,
-                receiveTimeoutMs
+                receiveTimeoutMs,
+                tlsEnabled,
+                trustStorePath,
+                trustStorePassword,
+                keyStorePath,
+                keyStorePassword
         );
     }
 
     @Override
-    public SplitEnumerator<ArtemisSplit, Boolean> createEnumerator(
-            SplitEnumeratorContext<ArtemisSplit> enumContext
-    ) {
+    public SplitEnumerator<ArtemisSplit, Boolean> createEnumerator(SplitEnumeratorContext<ArtemisSplit> enumContext) {
         return new ArtemisSplitEnumerator(enumContext, false);
     }
 
@@ -80,4 +106,5 @@ public class ArtemisSource implements Source<BrokerRecord, ArtemisSplit, Boolean
     public SimpleVersionedSerializer<Boolean> getEnumeratorCheckpointSerializer() {
         return new ArtemisEnumeratorStateSerializer();
     }
+
 }

@@ -3,18 +3,16 @@ package ru.gpbapp.datafirewallflink.mq.artemis;
 import jakarta.jms.Connection;
 import jakarta.jms.ConnectionFactory;
 import jakarta.jms.Destination;
-import jakarta.jms.JMSException;
 import jakarta.jms.MessageProducer;
 import jakarta.jms.Session;
 import jakarta.jms.TextMessage;
-import ru.gpbapp.datafirewallflink.mq.BrokerReply;
-
 import org.apache.activemq.artemis.jms.client.ActiveMQConnectionFactory;
 import org.apache.flink.api.connector.sink2.Sink;
 import org.apache.flink.api.connector.sink2.SinkWriter;
 import org.apache.flink.api.connector.sink2.WriterInitContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import ru.gpbapp.datafirewallflink.mq.BrokerReply;
 
 import java.io.IOException;
 import java.io.Serializable;
@@ -23,25 +21,55 @@ public class ArtemisSink implements Sink<BrokerReply>, Serializable {
 
     private static final long serialVersionUID = 1L;
 
-    private final String brokerUrl;
+    private final String host;
+    private final int port;
     private final String outQueue;
     private final String user;
     private final String password;
 
-    public ArtemisSink(String brokerUrl, String outQueue, String user, String password) {
-        this.brokerUrl = brokerUrl;
+    private final boolean tlsEnabled;
+    private final String trustStorePath;
+    private final String trustStorePassword;
+    private final String keyStorePath;
+    private final String keyStorePassword;
+
+    public ArtemisSink(
+            String host,
+            int port,
+            String outQueue,
+            String user,
+            String password,
+            boolean tlsEnabled,
+            String trustStorePath,
+            String trustStorePassword,
+            String keyStorePath,
+            String keyStorePassword
+    ) {
+        this.host = host;
+        this.port = port;
         this.outQueue = outQueue;
         this.user = user;
         this.password = password;
+        this.tlsEnabled = tlsEnabled;
+        this.trustStorePath = trustStorePath;
+        this.trustStorePassword = trustStorePassword;
+        this.keyStorePath = keyStorePath;
+        this.keyStorePassword = keyStorePassword;
     }
 
     @SuppressWarnings("deprecation")
     public SinkWriter<BrokerReply> createWriter(Sink.InitContext context) throws IOException {
         return new ArtemisSinkWriter(
-                brokerUrl,
+                host,
+                port,
                 outQueue,
                 user,
                 password,
+                tlsEnabled,
+                trustStorePath,
+                trustStorePassword,
+                keyStorePath,
+                keyStorePassword,
                 context.getSubtaskId()
         );
     }
@@ -49,10 +77,16 @@ public class ArtemisSink implements Sink<BrokerReply>, Serializable {
     @Override
     public SinkWriter<BrokerReply> createWriter(WriterInitContext context) throws IOException {
         return new ArtemisSinkWriter(
-                brokerUrl,
+                host,
+                port,
                 outQueue,
                 user,
                 password,
+                tlsEnabled,
+                trustStorePath,
+                trustStorePassword,
+                keyStorePath,
+                keyStorePassword,
                 context.getSubtaskId()
         );
     }
@@ -61,10 +95,16 @@ public class ArtemisSink implements Sink<BrokerReply>, Serializable {
 
         private static final Logger log = LoggerFactory.getLogger(ArtemisSinkWriter.class);
 
-        private final String brokerUrl;
+        private final String host;
+        private final int port;
         private final String outQueue;
         private final String user;
         private final String password;
+        private final boolean tlsEnabled;
+        private final String trustStorePath;
+        private final String trustStorePassword;
+        private final String keyStorePath;
+        private final String keyStorePassword;
         private final int subtaskId;
 
         private transient ConnectionFactory connectionFactory;
@@ -74,16 +114,28 @@ public class ArtemisSink implements Sink<BrokerReply>, Serializable {
         private transient MessageProducer producer;
 
         ArtemisSinkWriter(
-                String brokerUrl,
+                String host,
+                int port,
                 String outQueue,
                 String user,
                 String password,
+                boolean tlsEnabled,
+                String trustStorePath,
+                String trustStorePassword,
+                String keyStorePath,
+                String keyStorePassword,
                 int subtaskId
         ) throws IOException {
-            this.brokerUrl = brokerUrl;
+            this.host = host;
+            this.port = port;
             this.outQueue = outQueue;
             this.user = user;
             this.password = password;
+            this.tlsEnabled = tlsEnabled;
+            this.trustStorePath = trustStorePath;
+            this.trustStorePassword = trustStorePassword;
+            this.keyStorePath = keyStorePath;
+            this.keyStorePassword = keyStorePassword;
             this.subtaskId = subtaskId;
 
             open();
@@ -91,9 +143,19 @@ public class ArtemisSink implements Sink<BrokerReply>, Serializable {
 
         private void open() throws IOException {
             try {
+                String brokerUrl = ArtemisConnectionUrlBuilder.build(
+                        host,
+                        port,
+                        tlsEnabled,
+                        trustStorePath,
+                        trustStorePassword,
+                        keyStorePath,
+                        keyStorePassword
+                );
+
                 log.info(
-                        "ArtemisSinkWriter.open() subtask={} brokerUrl={} outQueue={} user={}",
-                        subtaskId, brokerUrl, outQueue, user
+                        "ArtemisSinkWriter.open() subtask={} brokerUrl={} outQueue={} user={} tlsEnabled={}",
+                        subtaskId, brokerUrl, outQueue, user, tlsEnabled
                 );
 
                 connectionFactory = new ActiveMQConnectionFactory(brokerUrl, user, password);
@@ -118,7 +180,6 @@ public class ArtemisSink implements Sink<BrokerReply>, Serializable {
 
             try {
                 String payload = value.payload == null ? "" : value.payload;
-
                 TextMessage message = session.createTextMessage(payload);
 
                 if (value.correlationId != null && !value.correlationId.isBlank()) {
@@ -133,7 +194,6 @@ public class ArtemisSink implements Sink<BrokerReply>, Serializable {
 
         @Override
         public void flush(boolean endOfInput) {
-            // без буфера
         }
 
         @Override
@@ -153,7 +213,9 @@ public class ArtemisSink implements Sink<BrokerReply>, Serializable {
                     session.close();
                 }
             } catch (Exception e) {
-                if (first == null) first = e;
+                if (first == null) {
+                    first = e;
+                }
             }
 
             try {
@@ -161,11 +223,19 @@ public class ArtemisSink implements Sink<BrokerReply>, Serializable {
                     connection.close();
                 }
             } catch (Exception e) {
-                if (first == null) first = e;
+                if (first == null) {
+                    first = e;
+                }
             }
 
             if (connectionFactory instanceof ActiveMQConnectionFactory cf) {
-                cf.close();
+                try {
+                    cf.close();
+                } catch (Exception e) {
+                    if (first == null) {
+                        first = e;
+                    }
+                }
             }
 
             if (first != null) {

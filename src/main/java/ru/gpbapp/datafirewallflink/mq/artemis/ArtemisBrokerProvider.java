@@ -3,7 +3,6 @@ package ru.gpbapp.datafirewallflink.mq.artemis;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-
 import ru.gpbapp.datafirewallflink.config.BrokerConfig;
 import ru.gpbapp.datafirewallflink.mq.BrokerProvider;
 import ru.gpbapp.datafirewallflink.mq.BrokerRecord;
@@ -29,13 +28,19 @@ public class ArtemisBrokerProvider implements BrokerProvider {
     public DataStream<BrokerRecord> buildSource(StreamExecutionEnvironment env, BrokerConfig config) {
         return env.fromSource(
                 new ArtemisSource(
-                        config.brokerUrl(),
+                        config.host(),
+                        config.port(),
                         config.inQueue(),
                         config.user(),
                         config.password(),
                         logPayloads,
                         logPreviewLen,
-                        receiveTimeoutMs
+                        receiveTimeoutMs,
+                        config.tlsEnabled(),
+                        config.trustStorePath(),
+                        config.trustStorePassword(),
+                        config.keyStorePath(),
+                        config.keyStorePassword()
                 ),
                 WatermarkStrategy.noWatermarks(),
                 "artemis-source"
@@ -46,10 +51,16 @@ public class ArtemisBrokerProvider implements BrokerProvider {
     public void bindSink(DataStream<BrokerReply> stream, BrokerConfig config) {
         stream.sinkTo(
                 new ArtemisSink(
-                        config.brokerUrl(),
+                        config.host(),
+                        config.port(),
                         config.outQueue(),
                         config.user(),
-                        config.password()
+                        config.password(),
+                        config.tlsEnabled(),
+                        config.trustStorePath(),
+                        config.trustStorePassword(),
+                        config.keyStorePath(),
+                        config.keyStorePassword()
                 )
         ).name("artemis-sink").setParallelism(1);
     }

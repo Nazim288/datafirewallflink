@@ -25,13 +25,19 @@ public class ArtemisSourceReader implements SourceReader<BrokerRecord, ArtemisSp
     private static final Logger log = LoggerFactory.getLogger(ArtemisSourceReader.class);
 
     private final int subtaskId;
-    private final String brokerUrl;
+    private final String host;
+    private final int port;
     private final String inQueue;
     private final String user;
     private final String password;
     private final boolean logPayloads;
     private final int logPreviewLen;
     private final long receiveTimeoutMs;
+    private final boolean tlsEnabled;
+    private final String trustStorePath;
+    private final String trustStorePassword;
+    private final String keyStorePath;
+    private final String keyStorePassword;
 
     private volatile boolean running = true;
     private boolean opened = false;
@@ -44,24 +50,36 @@ public class ArtemisSourceReader implements SourceReader<BrokerRecord, ArtemisSp
     private transient Destination destination;
     private transient MessageConsumer consumer;
 
-    public ArtemisSourceReader(
+    ArtemisSourceReader(
             int subtaskId,
-            String brokerUrl,
+            String host,
+            int port,
             String inQueue,
             String user,
             String password,
             boolean logPayloads,
             int logPreviewLen,
-            long receiveTimeoutMs
+            long receiveTimeoutMs,
+            boolean tlsEnabled,
+            String trustStorePath,
+            String trustStorePassword,
+            String keyStorePath,
+            String keyStorePassword
     ) {
         this.subtaskId = subtaskId;
-        this.brokerUrl = brokerUrl;
+        this.host = host;
+        this.port = port;
         this.inQueue = inQueue;
         this.user = user;
         this.password = password;
         this.logPayloads = logPayloads;
         this.logPreviewLen = logPreviewLen;
         this.receiveTimeoutMs = receiveTimeoutMs;
+        this.tlsEnabled = tlsEnabled;
+        this.trustStorePath = trustStorePath;
+        this.trustStorePassword = trustStorePassword;
+        this.keyStorePath = keyStorePath;
+        this.keyStorePassword = keyStorePassword;
     }
 
     @Override
@@ -173,9 +191,19 @@ public class ArtemisSourceReader implements SourceReader<BrokerRecord, ArtemisSp
             return;
         }
 
+        String brokerUrl = ArtemisConnectionUrlBuilder.build(
+                host,
+                port,
+                tlsEnabled,
+                trustStorePath,
+                trustStorePassword,
+                keyStorePath,
+                keyStorePassword
+        );
+
         log.info(
-                "ArtemisSourceReader.open() subtask={} brokerUrl={} inQueue={} user={}",
-                subtaskId, brokerUrl, inQueue, user
+                "ArtemisSourceReader.open() subtask={} brokerUrl={} inQueue={} user={} tlsEnabled={}",
+                subtaskId, brokerUrl, inQueue, user, tlsEnabled
         );
 
         connectionFactory = new ActiveMQConnectionFactory(brokerUrl, user, password);

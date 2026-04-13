@@ -93,6 +93,13 @@ DataFirewallFlink — приложение для обработки и филь
 --detail.kafka.bootstrap=localhost:9092
 --detail.kafka.topic=detail-answer
 
+--mq.tls.enabled=true
+--mq.tls.trustStore=/opt/certs/client-truststore.jks
+--mq.tls.trustStorePassword=changeit
+--mq.tls.keyStore=/opt/certs/client-keystore.jks
+--mq.tls.keyStorePassword=changeit
+--mq.tls.cipherSuite=TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+
 
 ##  Параметры запуска описание
 

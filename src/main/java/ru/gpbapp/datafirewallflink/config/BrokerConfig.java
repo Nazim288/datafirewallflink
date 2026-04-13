@@ -12,7 +12,13 @@ public record BrokerConfig (
         String inQueue,
         String outQueue,
         String user,
-        String password
+        String password,
+        boolean tlsEnabled,
+        String trustStorePath,
+        String trustStorePassword,
+        String keyStorePath,
+        String keyStorePassword,
+        String cipherSuite
 ) {
     public static BrokerConfig fromArgs(ParameterTool pt) {
         String type = pt.get("mq.type", "ibm");
@@ -26,7 +32,15 @@ public record BrokerConfig (
         String outQueue = pt.get("mq.outQueue", "REPLY.QUEUE");
         String user = pt.get("mq.user", "");
         String password = pt.get("mq.password", "");
+        boolean tlsEnabled = pt.getBoolean("mq.tlsEnabled", false);
+        String trustStorePath = pt.get("mq.trustStorePath", "");
+        String trustStorePassword = pt.get("mq.trustStorePassword", "");
+        String keyStorePath = pt.get("mq.keyStorePath", "");
+        String keyStorePassword = pt.get("mq.keyStorePassword", "");
+        String cipherSuite = pt.get("mq.cipherSuite", "");
 
-        return new BrokerConfig(type, host, port, channel, qmgr, brokerUrl, inQueue, outQueue, user, password);
+        return new BrokerConfig(type, host, port, channel, qmgr, brokerUrl, inQueue, outQueue, user, password,
+                tlsEnabled, trustStorePath, trustStorePassword, keyStorePath, keyStorePassword, cipherSuite
+        );
     }
 }
