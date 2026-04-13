@@ -1,4 +1,4 @@
-package ru.gpbapp.datafirewallflink.converter;
+package ru.gpbapp.datafirewallflink.services;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;

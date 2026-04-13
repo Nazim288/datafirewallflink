@@ -1,25 +1,25 @@
 package ru.gpbapp.datafirewallflink.dto;
 
-import ru.gpbapp.datafirewallflink.mq.MqReply;
+import ru.gpbapp.datafirewallflink.mq.BrokerReply;
 
 public class ProcessingResult {
 
-    private MqReply shortReply;
+    private BrokerReply shortReply;
     private String detailJson;
 
     public ProcessingResult() {
     }
 
-    public ProcessingResult(MqReply shortReply, String detailJson) {
+    public ProcessingResult(BrokerReply shortReply, String detailJson) {
         this.shortReply = shortReply;
         this.detailJson = detailJson;
     }
 
-    public MqReply getShortReply() {
+    public BrokerReply getShortReply() {
         return shortReply;
     }
 
-    public void setShortReply(MqReply shortReply) {
+    public void setShortReply(BrokerReply shortReply) {
         this.shortReply = shortReply;
     }
 

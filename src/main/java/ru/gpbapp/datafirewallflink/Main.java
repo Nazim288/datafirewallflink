@@ -16,14 +16,16 @@ import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import ru.gpbapp.datafirewallflink.config.JobConfig;
+
+import ru.gpbapp.datafirewallflink.config.BrokerConfig;
 import ru.gpbapp.datafirewallflink.dto.ProcessingResult;
 import ru.gpbapp.datafirewallflink.kafka.CacheUpdateEvent;
 import ru.gpbapp.datafirewallflink.kafka.CacheUpdateEventDeserializationSchema;
-import ru.gpbapp.datafirewallflink.mq.MqRecord;
-import ru.gpbapp.datafirewallflink.mq.MqReply;
-import ru.gpbapp.datafirewallflink.mq.MqSink;
-import ru.gpbapp.datafirewallflink.mq.MqSource;
+import ru.gpbapp.datafirewallflink.mq.BrokerProvider;
+import ru.gpbapp.datafirewallflink.mq.BrokerRecord;
+import ru.gpbapp.datafirewallflink.mq.BrokerReply;
+import ru.gpbapp.datafirewallflink.mq.artemis.ArtemisBrokerProvider;
+import ru.gpbapp.datafirewallflink.mq.ibm.IbmBrokerProvider;
 import ru.gpbapp.datafirewallflink.services.MqWithRulesReloadBroadcastProcessFunction;
 
 import java.nio.charset.StandardCharsets;
@@ -96,7 +98,8 @@ public class Main {
             log.info("[MAIN] checkpointing disabled");
         }
 
-        JobConfig cfg = JobConfig.fromArgs(pt);
+        // JobConfig cfg = JobConfig.fromArgs(pt);
+        BrokerConfig cfg = BrokerConfig.fromArgs(pt);
 
         boolean useMq = pt.getBoolean("use.mq", true);
         String kafkaBootstrap = pt.get("kafka.bootstrap", DEFAULT_KAFKA_BOOTSTRAP);
@@ -133,23 +136,21 @@ public class Main {
                 cfg
         );
 
-        final DataStream<MqRecord> mqStream;
+        // BrokerConfig brokerConfig = BrokerConfig.fromArgs(pt);
+
+        BrokerProvider brokerProvider;
+        if ("artemis".equalsIgnoreCase(cfg.type())) {
+            brokerProvider = new ArtemisBrokerProvider(logPayloads, 600, 1000);
+        } else if ("ibm".equalsIgnoreCase(cfg.type())) {
+            brokerProvider = new IbmBrokerProvider(logPayloads, 600, 1000);
+        } else {
+            throw new IllegalArgumentException("Unsupported mq.type: " + cfg.type());
+        }
+
+        final DataStream<BrokerRecord> mqStream;
 
         if (useMq) {
-            mqStream = env.addSource(
-                            new MqSource(
-                                    cfg.mqHost(),
-                                    cfg.mqPort(),
-                                    cfg.mqChannel(),
-                                    cfg.mqQmgr(),
-                                    cfg.mqInQueue(),
-                                    cfg.mqUser(),
-                                    cfg.mqPassword()
-                            ),
-                            "mq-source"
-                    )
-                    .name("mq-source")
-                    .setParallelism(1);
+            mqStream = brokerProvider.buildSource(env, cfg);
         } else {
             if (testJsonPath.isBlank()) {
                 throw new IllegalArgumentException(
@@ -164,7 +165,7 @@ public class Main {
                     testJsonPath
             );
 
-            mqStream = env.fromElements(new MqRecord(new byte[0], testJson))
+            mqStream = env.fromElements(new BrokerRecord("test-message-id", testJson))
                     .name("test-json-source")
                     .setParallelism(1);
         }
@@ -197,27 +198,16 @@ public class Main {
                 .name("mq-process-with-rules-reload")
                 .setParallelism(1);
 
-        DataStream<MqReply> shortReplies = processed
+        DataStream<BrokerReply> shortReplies = processed
                 .map(ProcessingResult::getShortReply)
                 .name("extract-short-reply")
                 .setParallelism(1)
                 .filter(Objects::nonNull)
                 .name("filter-short-reply-non-null")
                 .setParallelism(1);
-
-        shortReplies
-                .addSink(new MqSink(
-                        cfg.mqHost(),
-                        cfg.mqPort(),
-                        cfg.mqChannel(),
-                        cfg.mqQmgr(),
-                        cfg.mqOutQueue(),
-                        cfg.mqUser(),
-                        cfg.mqPassword()
-                ))
-                .name("mq-sink")
-                .setParallelism(1);
-
+                
+        brokerProvider.bindSink(shortReplies, cfg);
+        
         if (detailKafkaEnabled) {
             DataStream<String> detailReplies = processed
                     .map(ProcessingResult::getDetailJson)
@@ -252,7 +242,7 @@ public class Main {
             log.info("[MAIN] detail kafka sink is disabled.");
         }
 
-        env.execute("DataFirewall IBM MQ Job (SHORT ANSWER -> MQ, DETAIL ANSWER -> Kafka) + Kafka Rules Reload");
+        env.execute("DataFirewall MQ Job (SHORT ANSWER -> MQ, DETAIL ANSWER -> Kafka) + Kafka Rules Reload");
     }
 
     private static void logStartupConfig(
@@ -271,15 +261,17 @@ public class Main {
             String detailKafkaBootstrap,
             String detailKafkaTopic,
             boolean checkpointingEnabled,
-            JobConfig cfg
+            // JobConfig cfg
+            BrokerConfig cfg
     ) {
         log.info(
-                "[MAIN] startup config: parallelism={}, use.mq={}, kafka.bootstrap={}, kafka.topic={}, kafka.group={}, " +
+                "[MAIN] startup config: parallelism={}, use.mq={}, mq.type={}, kafka.bootstrap={}, kafka.topic={}, kafka.group={}, " +
                         "ignite.apiUrl={}, rules.loader={}, cache.bootstrap.enabled={}, politics.bootstrap.enabled={}, " +
                         "log.payloads={}, test.json.path={}, detail.kafka.enabled={}, detail.kafka.bootstrap={}, detail.kafka.topic={}, " +
                         "checkpointing.enabled={}, mq.host={}, mq.port={}, mq.channel={}, mq.qmgr={}, mq.inQueue={}, mq.outQueue={}, mq.user={}",
                 parallelism,
                 useMq,
+                cfg.type(),
                 kafkaBootstrap,
                 kafkaTopic,
                 kafkaGroup,
@@ -293,13 +285,20 @@ public class Main {
                 detailKafkaBootstrap,
                 detailKafkaTopic,
                 checkpointingEnabled,
-                cfg.mqHost(),
-                cfg.mqPort(),
-                cfg.mqChannel(),
-                cfg.mqQmgr(),
-                cfg.mqInQueue(),
-                cfg.mqOutQueue(),
-                cfg.mqUser()
+                // cfg.mqHost(),
+                // cfg.mqPort(),
+                // cfg.mqChannel(),
+                // cfg.mqQmgr(),
+                // cfg.mqInQueue(),
+                // cfg.mqOutQueue(),
+                // cfg.mqUser()
+                cfg.host(),
+                cfg.port(),
+                cfg.channel(),
+                cfg.qmgr(),
+                cfg.inQueue(),
+                cfg.outQueue(),
+                cfg.user()
         );
     }
 

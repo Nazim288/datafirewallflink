@@ -21,7 +21,6 @@ import ru.gpbapp.datafirewallflink.cache.PoliticsDatasetExclusionCache;
 import ru.gpbapp.datafirewallflink.cache.PoliticsErrorMessagesCache;
 import ru.gpbapp.datafirewallflink.cache.PoliticsFilterFlagCache;
 import ru.gpbapp.datafirewallflink.config.IgniteRulesApiClient;
-import ru.gpbapp.datafirewallflink.converter.MappingNormalizer;
 import ru.gpbapp.datafirewallflink.dto.CacheResponseDto;
 import ru.gpbapp.datafirewallflink.dto.HttpBytecodeSource;
 import ru.gpbapp.datafirewallflink.dto.IgniteBytecodeSource;
@@ -30,8 +29,8 @@ import ru.gpbapp.datafirewallflink.ignite.BytecodeSource;
 import ru.gpbapp.datafirewallflink.ignite.IgniteClientFacade;
 import ru.gpbapp.datafirewallflink.ignite.impl.IgniteClientFacadeImpl;
 import ru.gpbapp.datafirewallflink.kafka.CacheUpdateEvent;
-import ru.gpbapp.datafirewallflink.mq.MqRecord;
-import ru.gpbapp.datafirewallflink.mq.MqReply;
+import ru.gpbapp.datafirewallflink.mq.BrokerRecord;
+import ru.gpbapp.datafirewallflink.mq.BrokerReply;
 import ru.gpbapp.datafirewallflink.rule.RulesReloader;
 import ru.gpbapp.datafirewallflink.validation.ValidationResult;
 
@@ -49,7 +48,7 @@ import java.util.Map;
 import java.util.Set;
 
 public class MqWithRulesReloadBroadcastProcessFunction
-        extends BroadcastProcessFunction<MqRecord, CacheUpdateEvent, ProcessingResult> {
+        extends BroadcastProcessFunction<BrokerRecord, CacheUpdateEvent, ProcessingResult> {
 
     private static final Logger log =
             LoggerFactory.getLogger(MqWithRulesReloadBroadcastProcessFunction.class);
@@ -206,7 +205,7 @@ public class MqWithRulesReloadBroadcastProcessFunction
     }
 
     @Override
-    public void processElement(MqRecord in, ReadOnlyContext ctx, Collector<ProcessingResult> out) {
+    public void processElement(BrokerRecord in, ReadOnlyContext ctx, Collector<ProcessingResult> out) {
         if (in == null || in.payload == null || in.payload.isBlank()) {
             log.warn("[PIPE][no-qid] Empty MQ payload");
             return;
@@ -431,7 +430,7 @@ public class MqWithRulesReloadBroadcastProcessFunction
             }
 
             ProcessingResult result = new ProcessingResult(
-                    new MqReply(in.msgId, shortJson),
+                    new BrokerReply(in.messageId, shortJson),
                     detailJson
             );
 
