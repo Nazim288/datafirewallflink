@@ -52,7 +52,20 @@ public class Main {
 
     public static void main(String[] args) throws Exception {
         String[] normalized = normalizeArgs(args);
-        ParameterTool pt = ParameterTool.fromArgs(normalized);
+        ParameterTool cli = ParameterTool.fromArgs(normalized);
+        String propsPath = cli.get("config.file", "").trim();
+
+        if (propsPath.isBlank()) {
+            log.info("[MAIN] config.file параметр не задан, используется CLI/default значения");
+        } else {
+            log.info("[MAIN] загрузка параметров из конфиг файла: {}", propsPath);
+        }
+
+        ParameterTool fileProps = propsPath.isBlank()
+                ? ParameterTool.fromMap(java.util.Collections.emptyMap())
+                : ParameterTool.fromPropertiesFile(propsPath);
+
+        ParameterTool pt = fileProps.mergeWith(cli);
 
         final StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
         env.getConfig().setGlobalJobParameters(pt);

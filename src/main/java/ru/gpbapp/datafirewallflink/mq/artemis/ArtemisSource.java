@@ -28,6 +28,7 @@ public class ArtemisSource implements Source<BrokerRecord, ArtemisSplit, Boolean
     private final String trustStorePassword;
     private final String keyStorePath;
     private final String keyStorePassword;
+    private final String cipherSuite;
 
     public ArtemisSource(
             String host,
@@ -42,7 +43,8 @@ public class ArtemisSource implements Source<BrokerRecord, ArtemisSplit, Boolean
             String trustStorePath,
             String trustStorePassword,
             String keyStorePath,
-            String keyStorePassword
+            String keyStorePassword,
+            String cipherSuite
     ) {
         this.host = host;
         this.port = port;
@@ -57,6 +59,7 @@ public class ArtemisSource implements Source<BrokerRecord, ArtemisSplit, Boolean
         this.trustStorePassword = trustStorePassword;
         this.keyStorePath = keyStorePath;
         this.keyStorePassword = keyStorePassword;
+        this.cipherSuite = cipherSuite;
     }
 
     @Override
@@ -80,7 +83,8 @@ public class ArtemisSource implements Source<BrokerRecord, ArtemisSplit, Boolean
                 trustStorePath,
                 trustStorePassword,
                 keyStorePath,
-                keyStorePassword
+                keyStorePassword,
+                cipherSuite
         );
     }
 

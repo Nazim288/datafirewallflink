@@ -32,6 +32,7 @@ public class ArtemisSink implements Sink<BrokerReply>, Serializable {
     private final String trustStorePassword;
     private final String keyStorePath;
     private final String keyStorePassword;
+    private final String cipherSuite;
 
     public ArtemisSink(
             String host,
@@ -43,7 +44,8 @@ public class ArtemisSink implements Sink<BrokerReply>, Serializable {
             String trustStorePath,
             String trustStorePassword,
             String keyStorePath,
-            String keyStorePassword
+            String keyStorePassword,
+            String cipherSuite
     ) {
         this.host = host;
         this.port = port;
@@ -55,6 +57,7 @@ public class ArtemisSink implements Sink<BrokerReply>, Serializable {
         this.trustStorePassword = trustStorePassword;
         this.keyStorePath = keyStorePath;
         this.keyStorePassword = keyStorePassword;
+        this.cipherSuite = cipherSuite;
     }
 
     @SuppressWarnings("deprecation")
@@ -70,6 +73,7 @@ public class ArtemisSink implements Sink<BrokerReply>, Serializable {
                 trustStorePassword,
                 keyStorePath,
                 keyStorePassword,
+                cipherSuite,
                 context.getSubtaskId()
         );
     }
@@ -87,6 +91,7 @@ public class ArtemisSink implements Sink<BrokerReply>, Serializable {
                 trustStorePassword,
                 keyStorePath,
                 keyStorePassword,
+                cipherSuite,
                 context.getSubtaskId()
         );
     }
@@ -105,6 +110,7 @@ public class ArtemisSink implements Sink<BrokerReply>, Serializable {
         private final String trustStorePassword;
         private final String keyStorePath;
         private final String keyStorePassword;
+        private final String cipherSuite;
         private final int subtaskId;
 
         private transient ConnectionFactory connectionFactory;
@@ -124,6 +130,7 @@ public class ArtemisSink implements Sink<BrokerReply>, Serializable {
                 String trustStorePassword,
                 String keyStorePath,
                 String keyStorePassword,
+                String cipherSuite,
                 int subtaskId
         ) throws IOException {
             this.host = host;
@@ -136,6 +143,7 @@ public class ArtemisSink implements Sink<BrokerReply>, Serializable {
             this.trustStorePassword = trustStorePassword;
             this.keyStorePath = keyStorePath;
             this.keyStorePassword = keyStorePassword;
+            this.cipherSuite = cipherSuite;
             this.subtaskId = subtaskId;
 
             open();
@@ -150,7 +158,8 @@ public class ArtemisSink implements Sink<BrokerReply>, Serializable {
                         trustStorePath,
                         trustStorePassword,
                         keyStorePath,
-                        keyStorePassword
+                        keyStorePassword,
+                        cipherSuite
                 );
 
                 log.info(

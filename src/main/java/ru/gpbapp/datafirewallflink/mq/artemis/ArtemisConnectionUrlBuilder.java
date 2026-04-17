@@ -15,7 +15,8 @@ public final class ArtemisConnectionUrlBuilder {
             String trustStorePath,
             String trustStorePassword,
             String keyStorePath,
-            String keyStorePassword
+            String keyStorePassword,
+            String cipherSuite
     ) {
         String base = "tcp://" + host + ":" + port;
 
@@ -25,15 +26,20 @@ public final class ArtemisConnectionUrlBuilder {
 
         StringBuilder sb = new StringBuilder(base);
         sb.append("?sslEnabled=true");
+        sb.append("&protocols=TLSv1.2,TLSv1.3");
+        sb.append("ha=true");
 
+        if (notBlank(cipherSuite)) {
+            sb.append("&enabledCipherSuites=").append(cipherSuite);
+        }
         if (notBlank(trustStorePath)) {
-            sb.append("&trustStorePath=").append(urlEncode(trustStorePath));
+            sb.append("&trustStorePath=").append(trustStorePath);
         }
         if (notBlank(trustStorePassword)) {
             sb.append("&trustStorePassword=").append(urlEncode(trustStorePassword));
         }
         if (notBlank(keyStorePath)) {
-            sb.append("&keyStorePath=").append(urlEncode(keyStorePath));
+            sb.append("&keyStorePath=").append(keyStorePath);
         }
         if (notBlank(keyStorePassword)) {
             sb.append("&keyStorePassword=").append(urlEncode(keyStorePassword));

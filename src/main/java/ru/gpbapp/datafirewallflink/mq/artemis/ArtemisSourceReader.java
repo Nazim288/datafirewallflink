@@ -38,6 +38,7 @@ public class ArtemisSourceReader implements SourceReader<BrokerRecord, ArtemisSp
     private final String trustStorePassword;
     private final String keyStorePath;
     private final String keyStorePassword;
+    private final String cipherSuite;
 
     private volatile boolean running = true;
     private boolean opened = false;
@@ -64,7 +65,8 @@ public class ArtemisSourceReader implements SourceReader<BrokerRecord, ArtemisSp
             String trustStorePath,
             String trustStorePassword,
             String keyStorePath,
-            String keyStorePassword
+            String keyStorePassword,
+            String cipherSuite
     ) {
         this.subtaskId = subtaskId;
         this.host = host;
@@ -80,6 +82,7 @@ public class ArtemisSourceReader implements SourceReader<BrokerRecord, ArtemisSp
         this.trustStorePassword = trustStorePassword;
         this.keyStorePath = keyStorePath;
         this.keyStorePassword = keyStorePassword;
+        this.cipherSuite = cipherSuite;
     }
 
     @Override
@@ -198,7 +201,8 @@ public class ArtemisSourceReader implements SourceReader<BrokerRecord, ArtemisSp
                 trustStorePath,
                 trustStorePassword,
                 keyStorePath,
-                keyStorePassword
+                keyStorePassword,
+                cipherSuite
         );
 
         log.info(

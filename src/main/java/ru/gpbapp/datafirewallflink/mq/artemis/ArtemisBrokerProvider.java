@@ -40,7 +40,8 @@ public class ArtemisBrokerProvider implements BrokerProvider {
                         config.trustStorePath(),
                         config.trustStorePassword(),
                         config.keyStorePath(),
-                        config.keyStorePassword()
+                        config.keyStorePassword(),
+                        config.cipherSuite()
                 ),
                 WatermarkStrategy.noWatermarks(),
                 "artemis-source"
@@ -60,7 +61,8 @@ public class ArtemisBrokerProvider implements BrokerProvider {
                         config.trustStorePath(),
                         config.trustStorePassword(),
                         config.keyStorePath(),
-                        config.keyStorePassword()
+                        config.keyStorePassword(),
+                        config.cipherSuite()
                 )
         ).name("artemis-sink").setParallelism(1);
     }
